@@ -102,9 +102,9 @@ class TestEnsureGraphRequiredResourceAccess:
 
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path, app_type="cc"):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-1")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-1")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-1")
         monkeypatch.setenv("B2CC_INPUT_ENV", "dev")
         monkeypatch.setenv("B2CC_INPUT_TENNANT", "persona")
         monkeypatch.setenv("B2CC_INPUT_TYPE", app_type)

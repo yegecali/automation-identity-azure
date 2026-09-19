@@ -23,9 +23,9 @@ def _create_input_dto(**overrides) -> CreateInputDTO:
 
 class TestResolveRuntimeValues:
     def _set_dev_persona_env(self, monkeypatch):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-dev")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-dev")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-dev")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-dev")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-dev")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-dev")
 
     def test_builds_display_name_and_credentials(self, monkeypatch):
         self._set_dev_persona_env(monkeypatch)
@@ -94,9 +94,9 @@ class TestRunCreateFromInputReadsEnv:
 
 class TestRunCreateFromInput:
     def _set_common_env(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-1")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-1")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-1")
         monkeypatch.setenv("B2CC_INPUT_OPERATION", "create")
         monkeypatch.setenv("B2CC_INPUT_CHANNEL", "nhbk")
         monkeypatch.setenv("B2CC_INPUT_ENV", "dev")

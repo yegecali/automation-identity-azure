@@ -123,9 +123,9 @@ class TestResolveAppType:
 
 class TestResolveRuntimeValues:
     def _set_dev_persona_env(self, monkeypatch):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-dev")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-dev")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-dev")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-dev")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-dev")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-dev")
 
     def test_defaults_redirect_uri_when_missing(self, monkeypatch):
         self._set_dev_persona_env(monkeypatch)
