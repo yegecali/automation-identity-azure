@@ -44,7 +44,7 @@ jobs:
       tennant: ${{ steps.find.outputs.tennant }}
     env:
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
-      AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -114,7 +114,7 @@ jobs:
       B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
       B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
-      AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -169,7 +169,7 @@ jobs:
       issues: write
     env:
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
-      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT }}
       B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
     steps:
       - name: Checkout
@@ -218,10 +218,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT:-}" ]]; then
             echo "Falta configuracion para Table Storage:"
             echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
-            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT"
             exit 1
           fi
 

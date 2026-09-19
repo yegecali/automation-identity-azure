@@ -24,7 +24,7 @@ class TestBuildRunUrl:
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path):
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME", "history")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "history")
         monkeypatch.setenv("B2CC_INPUT_ENV", "dev")
         monkeypatch.setenv("B2CC_INPUT_TENNANT", "persona")
         output_file = tmp_path / "github_output.txt"

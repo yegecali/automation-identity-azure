@@ -115,14 +115,14 @@ def build_entity(event: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     connection_string = os.getenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "").strip()
-    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME", "").strip()
+    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "").strip()
     audit_file = os.getenv("B2CC_AUDIT_FILE", "./b2cc_audit_events.jsonl").strip()
     create_table_if_missing = _to_bool(os.getenv("B2CC_CREATE_TABLE_IF_MISSING", "false"))
 
     if not connection_string:
         raise RuntimeError("Falta AZURE_TABLE_STORAGE_CONNECTION_STRING.")
     if not table_name:
-        raise RuntimeError("Falta AZURE_TABLE_STORAGE_TABLE_NAME.")
+        raise RuntimeError("Falta AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT.")
 
     logging.info("[TABLE] Crear tabla si falta: %s", create_table_if_missing)
     events = load_audit_events(audit_file)

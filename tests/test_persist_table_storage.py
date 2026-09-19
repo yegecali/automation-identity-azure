@@ -169,19 +169,19 @@ class FakeUpsertTable:
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path, audit_file):
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "audit")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "audit")
         monkeypatch.setenv("B2CC_AUDIT_FILE", str(audit_file))
 
     def test_raises_when_connection_string_missing(self, monkeypatch, tmp_path):
         monkeypatch.delenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", raising=False)
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "audit")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "audit")
         with pytest.raises(RuntimeError, match="Falta AZURE_TABLE_STORAGE_CONNECTION_STRING"):
             pts.main()
 
     def test_raises_when_table_name_missing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.delenv("AZURE_TABLE_STORAGE_TABLE_NAME", raising=False)
-        with pytest.raises(RuntimeError, match="Falta AZURE_TABLE_STORAGE_TABLE_NAME"):
+        monkeypatch.delenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", raising=False)
+        with pytest.raises(RuntimeError, match="Falta AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT"):
             pts.main()
 
     def test_returns_early_when_no_events_to_persist(self, monkeypatch, tmp_path):

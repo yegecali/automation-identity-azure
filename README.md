@@ -240,12 +240,17 @@ Azure AD) para resolver `env`/`tennant` desde el snapshot y exponerlos como outp
 El snapshot se consulta dos veces (liviano en `buscar_snapshot`, completo en `revertir_*`) — es
 una lectura barata, no un problema real.
 
-Además, para la auditoría: `AZURE_TABLE_STORAGE_CONNECTION_STRING` (SAS) y
-`AZURE_TABLE_STORAGE_TABLE_NAME`. Para el rollback: la misma
-`AZURE_TABLE_STORAGE_CONNECTION_STRING` más una variable **nueva**,
-`AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME` (repo/environment variable en GitHub, distinta
-de la tabla de auditoría — hay que crearla antes de usar create/update, si no
-`guardar_snapshot_create`/`snapshot_estado_previo` fallarán por falta de configuración).
+Además se usa una única connection string, `AZURE_TABLE_STORAGE_CONNECTION_STRING` (secret), para
+dos tablas distintas dentro de la misma cuenta de storage — cada una con su propio nombre en un
+repo/environment variable:
+
+| Uso | Variable | Jobs |
+|---|---|---|
+| Auditoría (log de eventos) | `AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT` | `persistir_auditoria_create`, `persistir_auditoria_update`, `persistir_auditoria_revert` |
+| Rollback (snapshot de estado previo) | `AZURE_TABLE_STORAGE_TABLE_NAME` | `guardar_snapshot_create`, `snapshot_estado_previo`, `buscar_snapshot`, `revertir_creacion`, `revertir_actualizacion` |
+
+Ambas variables deben existir antes de usar create/update, si no los jobs correspondientes
+fallarán por falta de configuración.
 
 ## Dependencias
 

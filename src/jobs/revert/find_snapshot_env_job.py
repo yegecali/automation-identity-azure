@@ -49,10 +49,10 @@ def main() -> int:
         raise RuntimeError("Debes indicar --ticket-number.")
 
     connection_string = os.getenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "").strip()
-    table_name = os.getenv("AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME", "").strip()
+    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME", "").strip()
     if not connection_string or not table_name:
         raise RuntimeError(
-            "Faltan AZURE_TABLE_STORAGE_CONNECTION_STRING o AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME."
+            "Faltan AZURE_TABLE_STORAGE_CONNECTION_STRING o AZURE_TABLE_STORAGE_TABLE_NAME."
         )
 
     table = connect_table(connection_string, table_name, create_if_missing=False)
