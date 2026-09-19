@@ -11,11 +11,17 @@ import sys
 logging.basicConfig(level=logging.INFO)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+SRC_DIR = CURRENT_DIR
+while not os.path.isdir(os.path.join(SRC_DIR, "models")):
+    parent = os.path.dirname(SRC_DIR)
+    if parent == SRC_DIR:
+        raise RuntimeError("No se encontro el directorio 'src' (falta el paquete 'models').")
+    SRC_DIR = parent
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from services.graph_service import add_application_password, get_application_by_display_name, run_az
-from utils.common import build_app_display_name, get_obfuscated_secret, load_json_file
+from utils.common import build_app_display_name, get_obfuscated_secret, load_dispatch_input_from_env
 from utils.runtime_config import get_env_credentials
 
 
@@ -59,17 +65,18 @@ def resolve_app_context(input_data: dict, app_object_id_arg: str, app_name_arg: 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create CC client secret job")
-    parser.add_argument("--input", default="input.json", help="Path to input JSON")
     parser.add_argument("--app-object-id", default="", help="Application object ID")
     parser.add_argument("--app-name", default="", help="Application displayName")
     args = parser.parse_args()
 
-    input_data = load_json_file(args.input)
+    input_data = load_dispatch_input_from_env()
     app_type = str(input_data.get("type", "")).strip().lower()
     if app_type != "cc":
         logging.info("[SECRET] Flujo no CC, se omite creacion de client secret.")
         set_output("secret_status", "skipped")
         set_output("client_secret_obfuscated", "")
+        set_output("client_secret_alias", "")
+        set_output("client_secret_expires_at", "")
         return 0
 
     env = str(input_data.get("env", "")).strip().lower()
@@ -101,10 +108,14 @@ def main() -> int:
         raise RuntimeError("Graph no devolvio secretText al crear el client secret.")
 
     secret_obfuscated = get_obfuscated_secret(secret_value)
+    secret_expires_at = str(password_result.get("endDateTime") or "").strip()
     logging.info("[SECRET] Client secret creado (obfuscado): %s", secret_obfuscated)
+    logging.info("[SECRET] Vigente hasta: %s", secret_expires_at or "desconocido")
 
     set_output("secret_status", "created")
     set_output("client_secret_obfuscated", secret_obfuscated)
+    set_output("client_secret_alias", secret_display_name)
+    set_output("client_secret_expires_at", secret_expires_at)
     return 0
 
 

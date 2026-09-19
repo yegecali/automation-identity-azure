@@ -1,0 +1,431 @@
+name: B2CC - Create App Registration
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        required: true
+        type: string
+      env:
+        required: true
+        type: string
+      tennant:
+        required: true
+        type: string
+      type:
+        required: true
+        type: string
+      name:
+        required: true
+        type: string
+      user_app:
+        required: false
+        type: string
+        default: ""
+      single_code:
+        required: false
+        type: string
+        default: ""
+      issue_number:
+        required: false
+        type: string
+        default: ""
+      ticket_number:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      app_id:
+        description: Application (client) ID creado o reutilizado
+        value: ${{ jobs.crear_app.outputs.app_id }}
+      app_object_id:
+        description: Object ID de la App Registration
+        value: ${{ jobs.crear_app.outputs.app_object_id }}
+      app_display_name:
+        description: DisplayName generado para la app
+        value: ${{ jobs.crear_app.outputs.app_display_name }}
+      app_type:
+        description: Tipo de flujo (ac/cc)
+        value: ${{ jobs.crear_app.outputs.app_type }}
+      grant_status:
+        value: ${{ jobs.delegar_permisos_graph.outputs.grant_status }}
+      granted_scopes:
+        value: ${{ jobs.delegar_permisos_graph.outputs.granted_scopes }}
+      secret_status:
+        value: ${{ jobs.crear_client_secret_cc.outputs.secret_status }}
+      client_secret_obfuscated:
+        value: ${{ jobs.crear_client_secret_cc.outputs.client_secret_obfuscated }}
+      client_secret_alias:
+        value: ${{ jobs.crear_client_secret_cc.outputs.client_secret_alias }}
+      client_secret_expires_at:
+        value: ${{ jobs.crear_client_secret_cc.outputs.client_secret_expires_at }}
+      audit_status:
+        value: ${{ jobs.persistir_auditoria_create.outputs.audit_status }}
+      rollback_snapshot_status:
+        value: ${{ jobs.guardar_snapshot_create.outputs.snapshot_status }}
+
+jobs:
+  crear_app:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      app_id: ${{ steps.run_create_flow.outputs.app_id }}
+      app_object_id: ${{ steps.run_create_flow.outputs.app_object_id }}
+      app_display_name: ${{ steps.run_create_flow.outputs.app_display_name }}
+      app_type: ${{ steps.run_create_flow.outputs.app_type }}
+      sp_id: ${{ steps.validar_sp.outputs.sp_id }}
+      sp_status: ${{ steps.validar_sp.outputs.sp_status }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: create
+      B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run create flow
+        id: run_create_flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=3
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/create/create_app_registration_job.py; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Run create flow fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Run create flow fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Validar/crear service principal
+        id: validar_sp
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/create/validate_service_principal_job.py --app-id "${{ steps.run_create_flow.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Validar/crear service principal fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Validar/crear service principal fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Verificar propagación del SP
+        env:
+          APP_ID: ${{ steps.run_create_flow.outputs.app_id }}
+          EXPECTED_SP_ID: ${{ steps.validar_sp.outputs.sp_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=12
+          retry_wait_seconds=15
+          attempt=1
+          until python ./src/jobs/create/verify_service_principal_propagation_job.py --app-id "$APP_ID" --expected-sp-id "$EXPECTED_SP_ID"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Verificar propagacion del SP fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Verificar propagacion del SP fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance crear_app
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'La aplicación ya fue creada correctamente. Seguimos con los permisos.',
+            });
+
+  guardar_snapshot_create:
+    needs: [crear_app]
+    if: ${{ needs.crear_app.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      snapshot_status: ${{ steps.snapshot.outputs.snapshot_status }}
+    env:
+      B2CC_INPUT_OPERATION: create
+      B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Guardar snapshot de rollback
+        id: snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ./src/jobs/create/save_create_snapshot_job.py \
+            --ticket-number "${{ inputs.ticket_number }}" \
+            --app-id "${{ needs.crear_app.outputs.app_id }}" \
+            --app-object-id "${{ needs.crear_app.outputs.app_object_id }}" \
+            --app-display-name "${{ needs.crear_app.outputs.app_display_name }}" \
+            --sp-id "${{ needs.crear_app.outputs.sp_id }}" \
+            --app-type "${{ needs.crear_app.outputs.app_type }}"
+
+      - name: Comentar avance guardar_snapshot_create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Se guardó el snapshot de rollback, por si hace falta revertir esta creación más adelante.',
+            });
+
+  delegar_permisos_graph:
+    needs: [crear_app]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      grant_status: ${{ steps.delegar.outputs.grant_status }}
+      granted_scopes: ${{ steps.delegar.outputs.granted_scopes }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: create
+      B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Delegar permisos Graph
+        id: delegar
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/delegate_graph_permissions_job.py --app-id "${{ needs.crear_app.outputs.app_id }}" --app-sp-id "${{ needs.crear_app.outputs.sp_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Delegar permisos Graph fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Delegar permisos Graph fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance delegar_permisos_graph
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Los permisos en Graph quedaron aplicados correctamente.',
+            });
+
+  crear_client_secret_cc:
+    needs: [crear_app, delegar_permisos_graph]
+    if: ${{ needs.crear_app.outputs.app_type == 'cc' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      secret_status: ${{ steps.crear_secret.outputs.secret_status }}
+      client_secret_obfuscated: ${{ steps.crear_secret.outputs.client_secret_obfuscated }}
+      client_secret_alias: ${{ steps.crear_secret.outputs.client_secret_alias }}
+      client_secret_expires_at: ${{ steps.crear_secret.outputs.client_secret_expires_at }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: create
+      B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Crear client secret para CC
+        id: crear_secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=4
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/create/create_cc_client_secret_job.py --app-object-id "${{ needs.crear_app.outputs.app_object_id }}" --app-name "${{ needs.crear_app.outputs.app_display_name }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Crear client secret para CC fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Crear client secret para CC fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance crear_client_secret_cc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'El client secret se generó correctamente para el flujo CC.',
+            });
+
+  persistir_auditoria_create:
+    needs: [crear_app, delegar_permisos_graph, crear_client_secret_cc]
+    if: ${{ always() && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      audit_status: ${{ steps.persist.outputs.audit_status }}
+    env:
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Build create audit payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python3 - <<'PY'
+          import datetime as dt
+          import json
+          import re
+
+          def normalize_scopes(raw: str) -> str:
+              raw = str(raw or "").replace("\\n", "\n")
+              tokens = [token.strip() for token in re.split(r"[\s,]+", raw) if token.strip()]
+              seen = set()
+              result = []
+              for token in tokens:
+                  if token in seen:
+                      continue
+                  seen.add(token)
+                  result.append(token)
+              return ",".join(result)
+
+          event = {
+              "operation": "create",
+              "type": "${{ needs.crear_app.outputs.app_type }}",
+              "Clientcode": "${{ inputs.channel }}",
+              "appcode": "${{ inputs.single_code }}",
+              "clientid": "${{ needs.crear_app.outputs.app_id }}",
+              "scope": normalize_scopes("${{ needs.delegar_permisos_graph.outputs.granted_scopes }}"),
+              "userApp": "${{ inputs.user_app }}",
+              "PartitionKey": "${{ needs.crear_app.outputs.app_display_name }}",
+              "RowKey": "${{ inputs.tennant }}",
+              "createdAt": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+
+          with open("./artifacts/b2cc_audit_events.jsonl", "w", encoding="utf-8") as fh:
+              fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+          PY
+
+      - name: Persist audit records into Azure Table Storage
+        id: persist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
+            echo "Falta configuracion para Table Storage:"
+            echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
+            exit 1
+          fi
+
+          python ./src/jobs/persist_table_storage.py
+          echo "audit_status=persisted" >> "$GITHUB_OUTPUT"
+
+      - name: Comentar avance persistir_auditoria_create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'La auditoría de creación quedó guardada en Table Storage.',
+            });

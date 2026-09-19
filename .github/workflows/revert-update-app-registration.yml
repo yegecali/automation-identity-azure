@@ -1,0 +1,293 @@
+name: B2CC - Revert Update App Registration
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket_number:
+        required: true
+        type: string
+        description: Ticket number (itsm-12345) de la operación de actualización a revertir
+
+jobs:
+  abrir_issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      issue_number: ${{ steps.crear_issue.outputs.issue_number }}
+    steps:
+      - name: Crear issue de reversión
+        id: crear_issue
+        uses: actions/github-script@v7
+        env:
+          TICKET_NUMBER: ${{ github.event.inputs.ticket_number }}
+        with:
+          script: |
+            const createdIssue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `REVERT-UPDATE - ${process.env.TICKET_NUMBER}`,
+              body: 'SCRIPT-USER',
+            });
+
+            core.setOutput('issue_number', String(createdIssue.data.number));
+
+  buscar_snapshot:
+    needs: [abrir_issue]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      env: ${{ steps.find.outputs.env }}
+      tennant: ${{ steps.find.outputs.tennant }}
+    env:
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Buscar snapshot y resolver ambiente
+        id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ./src/jobs/revert/find_snapshot_env_job.py \
+            --ticket-number "${{ github.event.inputs.ticket_number }}" \
+            --operation update
+
+      - name: Comentar avance buscar_snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'Se encontró el snapshot de actualización a revertir (env=${{ steps.find.outputs.env }}, tennant=${{ steps.find.outputs.tennant }}). Seguimos con la reversión.',
+            });
+
+  revertir_actualizacion:
+    needs: [abrir_issue, buscar_snapshot]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    environment: ${{ needs.buscar_snapshot.outputs.env }}-${{ needs.buscar_snapshot.outputs.tennant }}
+    outputs:
+      revert_status: ${{ steps.revertir.outputs.revert_status }}
+      app_id: ${{ steps.revertir.outputs.app_id }}
+      app_object_id: ${{ steps.revertir.outputs.app_object_id }}
+      app_display_name: ${{ steps.revertir.outputs.app_display_name }}
+      env: ${{ steps.revertir.outputs.env }}
+      tennant: ${{ steps.revertir.outputs.tennant }}
+    env:
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Revertir actualización (restaurar manifest previo)
+        id: revertir
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=4
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/revert/revert_update_app_registration_job.py --ticket-number "${{ github.event.inputs.ticket_number }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Revertir actualización falló tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Revertir actualización falló en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance revertir_actualizacion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'El manifest previo fue restaurado correctamente. Seguimos con la auditoría.',
+            });
+
+  persistir_auditoria_revert:
+    needs: [abrir_issue, revertir_actualizacion]
+    if: ${{ needs.revertir_actualizacion.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Build revert audit payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python3 - <<'PY'
+          import datetime as dt
+          import json
+
+          event = {
+              "operation": "revert-update",
+              "type": "",
+              "Clientcode": "",
+              "appcode": "",
+              "clientid": "${{ needs.revertir_actualizacion.outputs.app_id }}",
+              "scope": "",
+              "userApp": "",
+              "PartitionKey": "${{ needs.revertir_actualizacion.outputs.app_display_name }}",
+              "RowKey": "${{ needs.revertir_actualizacion.outputs.tennant }}",
+              "createdAt": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+
+          with open("./artifacts/b2cc_audit_events.jsonl", "w", encoding="utf-8") as fh:
+              fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+          PY
+
+      - name: Persist audit records into Azure Table Storage
+        id: persist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
+            echo "Falta configuracion para Table Storage:"
+            echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
+            exit 1
+          fi
+
+          python ./src/jobs/persist_table_storage.py
+          echo "audit_status=persisted" >> "$GITHUB_OUTPUT"
+
+      - name: Comentar avance persistir_auditoria_revert
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'La auditoría de la reversión quedó guardada en Table Storage.',
+            });
+
+  cerrar_issue:
+    needs: [abrir_issue, buscar_snapshot, revertir_actualizacion, persistir_auditoria_revert]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Cerrar issue de reversión
+        uses: actions/github-script@v7
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+          ISSUE_NUMBER: ${{ needs.abrir_issue.outputs.issue_number }}
+        with:
+          script: |
+            const needs = JSON.parse(process.env.NEEDS_JSON || '{}');
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            const failedJobs = Object.entries(needs)
+              .filter(([jobName, jobData]) => jobName !== 'abrir_issue' && jobData?.result === 'failure')
+              .map(([jobName]) => jobName);
+
+            if (failedJobs.length > 0) {
+              const body = [
+                'REVERT-ERROR',
+                '',
+                '### detalles',
+                `Se presentó un error durante la reversión en: ${failedJobs.join(', ')}`,
+              ].join('\n');
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+                state: 'closed',
+              });
+
+              return;
+            }
+
+            if (needs.revertir_actualizacion?.result === 'success') {
+              const outputs = needs.revertir_actualizacion.outputs || {};
+              const body = [
+                'REVERT-SUCCESSFULL',
+                '',
+                '### detalles',
+                `Client ID revertido: ${outputs.app_id || 'N/A'}`,
+                `Aplicación: ${outputs.app_display_name || 'N/A'}`,
+                `Ambiente: ${outputs.env || 'N/A'} / ${outputs.tennant || 'N/A'}`,
+                'El manifest previo fue restaurado correctamente.',
+              ].join('\n');
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+                state: 'closed',
+              });
+
+              return;
+            }
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: 'REVERT-USER',
+              state: 'closed',
+            });

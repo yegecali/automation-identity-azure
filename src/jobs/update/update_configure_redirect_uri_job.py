@@ -12,13 +12,19 @@ import time
 logging.basicConfig(level=logging.INFO)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+SRC_DIR = CURRENT_DIR
+while not os.path.isdir(os.path.join(SRC_DIR, "models")):
+    parent = os.path.dirname(SRC_DIR)
+    if parent == SRC_DIR:
+        raise RuntimeError("No se encontro el directorio 'src' (falta el paquete 'models').")
+    SRC_DIR = parent
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from configure import resolve_runtime_values, validate_redirect_uri
 from models.dto import UpdateInputDTO
 from services.graph_service import get_application_by_id_with_retry, patch_application, run_az
-from utils.common import get_obfuscated_secret, load_json_file
+from utils.common import get_obfuscated_secret, load_dispatch_input_from_env
 
 
 def set_output(name: str, value: str) -> None:
@@ -31,12 +37,11 @@ def set_output(name: str, value: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Update configure redirect URI job")
-    parser.add_argument("--input", default="input.json", help="Path to input JSON")
     parser.add_argument("--app-object-id", required=True, help="Application object ID")
     parser.add_argument("--redirect-uri", default="", help="Optional redirect URI override")
     args = parser.parse_args()
 
-    input_data = load_json_file(args.input)
+    input_data = load_dispatch_input_from_env()
     input_dto = UpdateInputDTO.from_dict(input_data)
     runtime = resolve_runtime_values(input_dto)
 

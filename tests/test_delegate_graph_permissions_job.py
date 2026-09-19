@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+import sys
+
+import pytest
+
+import jobs.delegate_graph_permissions_job as delegate_job
+
+
+class TestResolvePermissions:
+    def test_cc_returns_cc_permissions(self):
+        assert delegate_job.resolve_permissions("cc") == delegate_job.CC_GRAPH_DELEGATED_PERMISSIONS
+
+    def test_ac_returns_ac_permissions(self):
+        assert delegate_job.resolve_permissions("AC") == delegate_job.AC_GRAPH_DELEGATED_PERMISSIONS
+
+    def test_invalid_type_raises(self):
+        with pytest.raises(RuntimeError, match="type debe ser 'cc' o 'ac'"):
+            delegate_job.resolve_permissions("oidc")
+
+
+class TestEnsureGraphRequiredResourceAccess:
+    def _graph_sp(self):
+        return {
+            "oauth2PermissionScopes": [
+                {"value": "openid", "id": "openid-id"},
+                {"value": "offline_access", "id": "offline-id"},
+            ]
+        }
+
+    def test_raises_when_app_not_found(self, monkeypatch):
+        monkeypatch.setattr(delegate_job, "get_application_by_app_id", lambda app_id: None)
+        with pytest.raises(RuntimeError, match="No se encontro la App Registration"):
+            delegate_job.ensure_graph_required_resource_access("app-1", "graph-app-id", ["openid"])
+
+    def test_raises_when_app_has_no_object_id(self, monkeypatch):
+        monkeypatch.setattr(delegate_job, "get_application_by_app_id", lambda app_id: {"appId": "app-1"})
+        with pytest.raises(RuntimeError, match="no tiene object id valido"):
+            delegate_job.ensure_graph_required_resource_access("app-1", "graph-app-id", ["openid"])
+
+    def test_raises_when_graph_sp_not_found(self, monkeypatch):
+        monkeypatch.setattr(delegate_job, "get_application_by_app_id", lambda app_id: {"id": "obj-1"})
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", lambda app_id: None)
+        with pytest.raises(RuntimeError, match="No se encontro service principal de Microsoft Graph"):
+            delegate_job.ensure_graph_required_resource_access("app-1", "graph-app-id", ["openid"])
+
+    def test_raises_when_permission_id_cannot_be_resolved(self, monkeypatch):
+        monkeypatch.setattr(delegate_job, "get_application_by_app_id", lambda app_id: {"id": "obj-1"})
+        monkeypatch.setattr(
+            delegate_job, "get_service_principal_by_app_id", lambda app_id: {"oauth2PermissionScopes": []}
+        )
+        with pytest.raises(RuntimeError, match="No se pudieron resolver IDs"):
+            delegate_job.ensure_graph_required_resource_access("app-1", "graph-app-id", ["openid"])
+
+    def test_patches_merged_resource_access_and_returns_count(self, monkeypatch):
+        monkeypatch.setattr(
+            delegate_job,
+            "get_application_by_app_id",
+            lambda app_id: {"id": "obj-1", "requiredResourceAccess": []},
+        )
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", lambda app_id: self._graph_sp())
+        patch_calls = []
+        monkeypatch.setattr(
+            delegate_job, "patch_application", lambda object_id, body: patch_calls.append((object_id, body))
+        )
+
+        count = delegate_job.ensure_graph_required_resource_access(
+            "app-1", "graph-app-id", ["openid", "offline_access"]
+        )
+
+        assert count == 2
+        object_id, body = patch_calls[0]
+        assert object_id == "obj-1"
+        graph_entry = next(
+            e for e in body["requiredResourceAccess"] if e["resourceAppId"] == "graph-app-id"
+        )
+        assert {item["id"] for item in graph_entry["resourceAccess"]} == {"openid-id", "offline-id"}
+
+    def test_preserves_other_resource_apps(self, monkeypatch):
+        monkeypatch.setattr(
+            delegate_job,
+            "get_application_by_app_id",
+            lambda app_id: {
+                "id": "obj-1",
+                "requiredResourceAccess": [
+                    {"resourceAppId": "some-other-api", "resourceAccess": [{"id": "x", "type": "Scope"}]}
+                ],
+            },
+        )
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", lambda app_id: self._graph_sp())
+        patch_calls = []
+        monkeypatch.setattr(
+            delegate_job, "patch_application", lambda object_id, body: patch_calls.append((object_id, body))
+        )
+
+        delegate_job.ensure_graph_required_resource_access("app-1", "graph-app-id", ["openid"])
+
+        _, body = patch_calls[0]
+        resource_app_ids = {e["resourceAppId"] for e in body["requiredResourceAccess"]}
+        assert resource_app_ids == {"some-other-api", "graph-app-id"}
+
+
+class TestMain:
+    def _set_common_env(self, monkeypatch, tmp_path, app_type="cc"):
+        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("B2CC_CLIENT_ID", "client-1")
+        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("B2CC_INPUT_ENV", "dev")
+        monkeypatch.setenv("B2CC_INPUT_TENNANT", "persona")
+        monkeypatch.setenv("B2CC_INPUT_TYPE", app_type)
+        monkeypatch.setattr(delegate_job, "run_az", lambda args: None)
+        output_file = tmp_path / "github_output.txt"
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+        return output_file
+
+    def test_full_flow_with_provided_app_sp_id(self, monkeypatch, tmp_path):
+        output_file = self._set_common_env(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            delegate_job,
+            "get_service_principal_by_app_id",
+            lambda app_id: {"id": "graph-sp-1"},
+        )
+        monkeypatch.setattr(
+            delegate_job, "ensure_graph_required_resource_access", lambda app_id, graph_app_id, permissions: 2
+        )
+        monkeypatch.setattr(
+            delegate_job,
+            "upsert_oauth2_permission_grant_with_retry",
+            lambda client_id, resource_id, scopes: "created",
+        )
+        monkeypatch.setattr(sys, "argv", ["prog", "--app-id", "app-1", "--app-sp-id", "app-sp-1"])
+
+        assert delegate_job.main() == 0
+        content = output_file.read_text(encoding="utf-8")
+        assert "grant_status=created" in content
+        assert "app_sp_id=app-sp-1" in content
+
+    def test_resolves_app_sp_id_when_not_provided(self, monkeypatch, tmp_path):
+        output_file = self._set_common_env(monkeypatch, tmp_path)
+
+        def fake_get_sp(app_id):
+            if app_id == "app-1":
+                return {"id": "resolved-sp"}
+            return {"id": "graph-sp-1"}
+
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", fake_get_sp)
+        monkeypatch.setattr(
+            delegate_job, "ensure_graph_required_resource_access", lambda app_id, graph_app_id, permissions: 2
+        )
+        monkeypatch.setattr(
+            delegate_job,
+            "upsert_oauth2_permission_grant_with_retry",
+            lambda client_id, resource_id, scopes: "created",
+        )
+        monkeypatch.setattr(sys, "argv", ["prog", "--app-id", "app-1"])
+
+        assert delegate_job.main() == 0
+        assert "app_sp_id=resolved-sp" in output_file.read_text(encoding="utf-8")
+
+    def test_raises_when_app_service_principal_not_found(self, monkeypatch, tmp_path):
+        self._set_common_env(monkeypatch, tmp_path)
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", lambda app_id: None)
+        monkeypatch.setattr(sys, "argv", ["prog", "--app-id", "app-1"])
+
+        with pytest.raises(RuntimeError, match="No se encontro service principal de la aplicacion"):
+            delegate_job.main()
+
+    def test_raises_when_graph_service_principal_not_found(self, monkeypatch, tmp_path):
+        self._set_common_env(monkeypatch, tmp_path)
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", lambda app_id: None)
+        monkeypatch.setattr(sys, "argv", ["prog", "--app-id", "app-1", "--app-sp-id", "app-sp-1"])
+
+        with pytest.raises(RuntimeError, match="No se encontro service principal de Microsoft Graph"):
+            delegate_job.main()
+
+    def test_raises_when_graph_service_principal_missing_id(self, monkeypatch, tmp_path):
+        self._set_common_env(monkeypatch, tmp_path)
+        monkeypatch.setattr(delegate_job, "get_service_principal_by_app_id", lambda app_id: {"displayName": "x"})
+        monkeypatch.setattr(sys, "argv", ["prog", "--app-id", "app-1", "--app-sp-id", "app-sp-1"])
+
+        with pytest.raises(RuntimeError, match="Service principal de Graph no tiene id"):
+            delegate_job.main()

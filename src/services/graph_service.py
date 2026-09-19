@@ -473,6 +473,18 @@ def add_application_password(
     )
 
 
+def patch_service_principal(sp_id: str, body: dict[str, Any]) -> None:
+    """Actualiza propiedades de un Service Principal existente.
+
+    Efecto en tenant:
+    - Modifica el objeto `servicePrincipal` (ej. deshabilitarlo con accountEnabled=false).
+
+    Pasos funcionales:
+    1. Ejecuta PATCH a `/servicePrincipals/{id}` con el body recibido.
+    """
+    graph_patch(f"https://graph.microsoft.com/v1.0/servicePrincipals/{sp_id}", body)
+
+
 def create_service_principal(app_id: str) -> dict[str, Any]:
     """Crea Service Principal para una aplicacion en el tenant.
 

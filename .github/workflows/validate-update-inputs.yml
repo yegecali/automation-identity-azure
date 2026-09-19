@@ -1,0 +1,88 @@
+name: B2CC - Validate Update Inputs
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        required: true
+        type: string
+      tennant:
+        required: true
+        type: string
+      type:
+        required: false
+        type: string
+        default: ""
+      name:
+        required: false
+        type: string
+        default: ""
+      application_name:
+        required: true
+        type: string
+      scopes:
+        required: true
+        type: string
+      issue_number:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      app_found:
+        value: ${{ jobs.validar_inputs_update.outputs.app_found }}
+      scopes_added:
+        value: ${{ jobs.validar_inputs_update.outputs.scopes_added }}
+      scopes_missing:
+        value: ${{ jobs.validar_inputs_update.outputs.scopes_missing }}
+
+jobs:
+  validar_inputs_update:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      app_found: ${{ steps.validar.outputs.app_found }}
+      scopes_added: ${{ steps.validar.outputs.scopes_added }}
+      scopes_missing: ${{ steps.validar.outputs.scopes_missing }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validar match de scopes contra Graph
+        id: validar
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ./src/jobs/validate/validate_update_inputs_job.py \
+            --comment-output ./artifacts/validate_update_comment.md
+
+      - name: Comentar validación en el issue
+        if: ${{ inputs.issue_number != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('./artifacts/validate_update_comment.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body,
+            });

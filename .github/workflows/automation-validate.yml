@@ -1,0 +1,241 @@
+name: Run B2CC Validation (Python)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        required: false
+        type: choice
+        options:
+          - "01 - Creación"
+          - "02 - Actualización"
+      env:
+        required: false
+        type: choice
+        options:
+          - "Desarrollo"
+          - "Certificación"
+          - "Producción"
+      tennant:
+        required: false
+        type: choice
+        options:
+          - "B2C Core Persona"
+          - "B2C Core PYME"
+      type:
+        required: false
+        type: choice
+        options:
+          - "AC - Authorization Code con Login Unico"
+          - "CC - Client Credentials"
+      name:
+        required: false
+        type: string
+      ticket_number:
+        required: false
+        type: string # itsm-12345
+      channel:
+        required: false
+        type: string # nhbk, solo aplica a creación
+      scopes:
+        required: false
+        type: string # scope1,scope2,scope3 — solo aplica a actualización
+      applicationName:
+        required: false
+        type: string # solo aplica a actualización
+
+jobs:
+  abrir_issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      issue_number: ${{ steps.crear_issue.outputs.issue_number }}
+    steps:
+      - name: Crear issue de validación
+        id: crear_issue
+        uses: actions/github-script@v7
+        env:
+          TICKET_NUMBER: ${{ github.event.inputs.ticket_number }}
+        with:
+          script: |
+            const ticketNumber = process.env.TICKET_NUMBER || '(sin ticket)';
+            const createdIssue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `VALIDATE - ${ticketNumber}`,
+              body: 'SCRIPT-VALIDATE',
+            });
+
+            core.setOutput('issue_number', String(createdIssue.data.number));
+
+  normalizar_inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      operation: ${{ steps.normalize.outputs.operation }}
+      env: ${{ steps.normalize.outputs.env }}
+      tennant: ${{ steps.normalize.outputs.tennant }}
+      type: ${{ steps.normalize.outputs.type }}
+    steps:
+      - name: Normalizar operation/env/tennant/type del dispatch
+        id: normalize
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          operation_map = {
+              "01 - Creación": "create",
+              "02 - Actualización": "update",
+              "create": "create",
+              "update": "update",
+          }
+          env_map = {
+              "Desarrollo": "dev",
+              "Certificación": "cer",
+              "Producción": "pro",
+              "dev": "dev",
+              "cer": "cer",
+              "pro": "pro",
+          }
+          tennant_map = {
+              "B2C Core Persona": "persona",
+              "B2C Core PYME": "pyme",
+              "persona": "persona",
+              "pyme": "pyme",
+          }
+          type_map = {
+              "AC - Authorization Code con Login Unico": "ac",
+              "CC - Client Credentials": "cc",
+              "ac": "ac",
+              "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          print(f"operation={operation_map.get(raw_operation, raw_operation)}")
+          print(f"env={env_map.get(raw_env, raw_env)}")
+          print(f"tennant={tennant_map.get(raw_tennant, raw_tennant)}")
+          print(f"type={type_map.get(raw_type, raw_type)}")
+          PY
+
+  validar_creacion:
+    needs: [normalizar_inputs, abrir_issue]
+    if: ${{ needs.normalizar_inputs.outputs.operation == 'create' }}
+    permissions:
+      issues: write
+    uses: ./.github/workflows/validate-create-inputs.yml
+    secrets: inherit
+    with:
+      channel: ${{ github.event.inputs.channel }}
+      env: ${{ needs.normalizar_inputs.outputs.env }}
+      tennant: ${{ needs.normalizar_inputs.outputs.tennant }}
+      type: ${{ needs.normalizar_inputs.outputs.type }}
+      name: ${{ github.event.inputs.name }}
+      issue_number: ${{ needs.abrir_issue.outputs.issue_number }}
+
+  validar_actualizacion:
+    needs: [normalizar_inputs, abrir_issue]
+    if: ${{ needs.normalizar_inputs.outputs.operation == 'update' }}
+    permissions:
+      issues: write
+    uses: ./.github/workflows/validate-update-inputs.yml
+    secrets: inherit
+    with:
+      env: ${{ needs.normalizar_inputs.outputs.env }}
+      tennant: ${{ needs.normalizar_inputs.outputs.tennant }}
+      type: ${{ needs.normalizar_inputs.outputs.type }}
+      name: ${{ github.event.inputs.name }}
+      application_name: ${{ github.event.inputs.applicationName }}
+      scopes: ${{ github.event.inputs.scopes }}
+      issue_number: ${{ needs.abrir_issue.outputs.issue_number }}
+
+  cerrar_issue:
+    needs: [abrir_issue, validar_creacion, validar_actualizacion]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Cerrar issue de validación
+        uses: actions/github-script@v7
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+          ISSUE_NUMBER: ${{ needs.abrir_issue.outputs.issue_number }}
+        with:
+          script: |
+            const needs = JSON.parse(process.env.NEEDS_JSON || '{}');
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            const failedJobs = Object.entries(needs)
+              .filter(([jobName, jobData]) => jobName !== 'abrir_issue' && jobData?.result === 'failure')
+              .map(([jobName]) => jobName);
+
+            if (failedJobs.length > 0) {
+              const body = [
+                'VALIDATE-ERROR',
+                '',
+                '### detalles',
+                `Se presentó un error durante la validación en: ${failedJobs.join(', ')}`,
+              ].join('\n');
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+                state: 'closed',
+              });
+
+              return;
+            }
+
+            const createResult = needs.validar_creacion?.result;
+            const updateResult = needs.validar_actualizacion?.result;
+            const isSuccess = createResult === 'success' || updateResult === 'success';
+
+            if (isSuccess) {
+              const outputs = createResult === 'success'
+                ? needs.validar_creacion.outputs
+                : needs.validar_actualizacion.outputs;
+
+              const detailLines = createResult === 'success'
+                ? [
+                    `Client ID ya existe: ${outputs?.client_id_exists ?? 'N/A'}`,
+                    `Alias de client secret ya existe: ${outputs?.secret_alias_exists ?? 'N/A'}`,
+                  ]
+                : [
+                    `Aplicación encontrada: ${outputs?.app_found ?? 'N/A'}`,
+                    `Scopes que se agregarían: ${outputs?.scopes_added || '(ninguno)'}`,
+                    `Scopes configurados hoy fuera del request: ${outputs?.scopes_missing || '(ninguno)'}`,
+                  ];
+
+              const body = [
+                'VALIDATE-SUCCESSFULL',
+                '',
+                '### detalles',
+                ...detailLines,
+                '',
+                'Revisa los comentarios anteriores en este issue para el detalle completo.',
+              ].join('\n');
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+                state: 'closed',
+              });
+
+              return;
+            }
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: 'VALIDATE-USER',
+              state: 'closed',
+            });

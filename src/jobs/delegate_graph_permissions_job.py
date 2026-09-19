@@ -11,8 +11,14 @@ import sys
 logging.basicConfig(level=logging.INFO)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+SRC_DIR = CURRENT_DIR
+while not os.path.isdir(os.path.join(SRC_DIR, "models")):
+    parent = os.path.dirname(SRC_DIR)
+    if parent == SRC_DIR:
+        raise RuntimeError("No se encontro el directorio 'src' (falta el paquete 'models').")
+    SRC_DIR = parent
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from constants import AC_GRAPH_DELEGATED_PERMISSIONS, CC_GRAPH_DELEGATED_PERMISSIONS, MICROSOFT_GRAPH_APP_ID
 from services.graph_service import (
@@ -22,7 +28,7 @@ from services.graph_service import (
     run_az,
     upsert_oauth2_permission_grant_with_retry,
 )
-from utils.common import dedupe_resource_access, get_obfuscated_secret, load_json_file
+from utils.common import dedupe_resource_access, get_obfuscated_secret, load_dispatch_input_from_env
 from utils.runtime_config import get_env_credentials
 
 
@@ -117,12 +123,11 @@ def ensure_graph_required_resource_access(app_id: str, graph_app_id: str, permis
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Delegate Graph permissions job")
-    parser.add_argument("--input", default="input.json", help="Path to input JSON")
     parser.add_argument("--app-id", required=True, help="Application (client) ID")
     parser.add_argument("--app-sp-id", default="", help="Application service principal ID")
     args = parser.parse_args()
 
-    input_data = load_json_file(args.input)
+    input_data = load_dispatch_input_from_env()
     env = str(input_data.get("env", "")).strip().lower()
     tennant = str(input_data.get("tennant") or input_data.get("tenant") or "").strip().lower()
     app_type = str(input_data.get("type", "")).strip().lower()

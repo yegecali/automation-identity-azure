@@ -11,13 +11,19 @@ import sys
 logging.basicConfig(level=logging.INFO)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+SRC_DIR = CURRENT_DIR
+while not os.path.isdir(os.path.join(SRC_DIR, "models")):
+    parent = os.path.dirname(SRC_DIR)
+    if parent == SRC_DIR:
+        raise RuntimeError("No se encontro el directorio 'src' (falta el paquete 'models').")
+    SRC_DIR = parent
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from configure import configure_ac_scopes, resolve_runtime_values
 from models.dto import UpdateInputDTO
 from services.graph_service import run_az
-from utils.common import load_json_file, unique_scopes
+from utils.common import load_dispatch_input_from_env, unique_scopes
 
 
 def set_output(name: str, value: str) -> None:
@@ -30,13 +36,12 @@ def set_output(name: str, value: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Update add scopes job")
-    parser.add_argument("--input", default="input.json", help="Path to input JSON")
     parser.add_argument("--app-object-id", required=True, help="Application object ID")
     parser.add_argument("--app-id", required=True, help="Application (client) ID")
     parser.add_argument("--scopes-csv", default="", help="Optional scopes override as CSV")
     args = parser.parse_args()
 
-    input_data = load_json_file(args.input)
+    input_data = load_dispatch_input_from_env()
     input_dto = UpdateInputDTO.from_dict(input_data)
     runtime = resolve_runtime_values(input_dto)
 

@@ -109,6 +109,43 @@ def load_json_file(path: str) -> dict[str, Any]:
     return data
 
 
+DISPATCH_INPUT_ENV_KEYS = {
+    "operation": "B2CC_INPUT_OPERATION",
+    "channel": "B2CC_INPUT_CHANNEL",
+    "env": "B2CC_INPUT_ENV",
+    "tennant": "B2CC_INPUT_TENNANT",
+    "type": "B2CC_INPUT_TYPE",
+    "name": "B2CC_INPUT_NAME",
+    "applicationName": "B2CC_INPUT_APPLICATION_NAME",
+    "webRedirectUri": "B2CC_INPUT_WEB_REDIRECT_URI",
+    "scopes": "B2CC_INPUT_SCOPES",
+}
+
+
+def load_dispatch_input_from_env() -> dict[str, Any]:
+    """Arma el dict de input del dispatch leyendo variables de entorno B2CC_INPUT_*.
+
+    Reemplaza el patron anterior de escribir un JSON a disco y volver a leerlo:
+    el job de GitHub Actions ya expone estos valores como variables de entorno
+    (definidas en el `env:` del job, sin interpolarlas dentro de un script), asi
+    que no hace falta el archivo intermedio.
+
+    Efecto en tenant:
+    - Ninguno. Solo lee variables de entorno del proceso actual.
+
+    Pasos funcionales:
+    1. Recorre las claves esperadas por CreateInputDTO/UpdateInputDTO.
+    2. Por cada una, lee la variable B2CC_INPUT_* correspondiente si esta definida.
+    3. Omite las no definidas (para no pisar defaults/opcionales de los DTOs).
+    """
+    data: dict[str, Any] = {}
+    for field_name, env_name in DISPATCH_INPUT_ENV_KEYS.items():
+        raw_value = os.getenv(env_name)
+        if raw_value is not None:
+            data[field_name] = raw_value
+    return data
+
+
 def dedupe_resource_access(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deduplica elementos resourceAccess por combinacion id|type.
 

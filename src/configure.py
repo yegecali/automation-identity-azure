@@ -39,6 +39,32 @@ DEFAULT_REDIRECT_URI = "https://jwt.ms"
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
+MANIFEST_RESTORABLE_FIELDS = ("identifierUris", "web", "spa", "api", "appRoles", "requiredResourceAccess")
+
+
+def build_manifest_restore_patch(before_manifest: dict[str, Any]) -> dict[str, Any]:
+    """Construye el body de PATCH para restaurar un manifest capturado antes de un update.
+
+    Efecto en tenant:
+    - Ninguno. Solo arma el payload; el PATCH real lo hace el caller.
+
+    Pasos funcionales:
+    1. Selecciona unicamente las propiedades editables que el flujo update
+       modifica (identifierUris/web/spa/api/appRoles/requiredResourceAccess).
+    2. Omite propiedades de solo lectura devueltas por Graph (id, appId,
+       createdDateTime, publisherDomain, etc.) que un PATCH rechazaria.
+    """
+    if not isinstance(before_manifest, dict):
+        raise RuntimeError("before_manifest debe ser un objeto JSON valido para poder revertir.")
+
+    patch_body = {
+        field: before_manifest[field] for field in MANIFEST_RESTORABLE_FIELDS if field in before_manifest
+    }
+
+    if not patch_body:
+        raise RuntimeError("El snapshot no contiene propiedades restaurables conocidas.")
+
+    return patch_body
 
 
 def validate_app_client_id(app_client_id: str) -> None:

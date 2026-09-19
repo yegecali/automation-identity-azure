@@ -6,3 +6,18 @@ artifacts/
 *.jsonl
 .env
 input.json
+
+# tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# actionlint (downloaded locally by tests.yml's local-run instructions)
+/actionlint
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,640 @@
+name: B2CC - Update App Registration
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        required: true
+        type: string
+      tennant:
+        required: true
+        type: string
+      type:
+        required: false
+        type: string
+        default: ""
+      name:
+        required: false
+        type: string
+        default: ""
+      application_name:
+        required: true
+        type: string
+      web_redirect_uri:
+        required: false
+        type: string
+        default: ""
+      scopes:
+        required: true
+        type: string
+      channel:
+        required: false
+        type: string
+        default: ""
+      user_app:
+        required: false
+        type: string
+        default: ""
+      single_code:
+        required: false
+        type: string
+        default: ""
+      issue_number:
+        required: false
+        type: string
+        default: ""
+      ticket_number:
+        required: false
+        type: string
+        default: ""
+    outputs:
+      app_id:
+        value: ${{ jobs.update_busqueda_app.outputs.app_id }}
+      app_object_id:
+        value: ${{ jobs.update_busqueda_app.outputs.app_object_id }}
+      app_type:
+        value: ${{ jobs.update_busqueda_app.outputs.app_type }}
+      redirect_uri:
+        value: ${{ jobs.update_configurar_redirect_uri.outputs.redirect_uri }}
+      application_id_uri:
+        value: ${{ jobs.update_agregar_application_id_uri_ac.outputs.application_id_uri || jobs.update_agregar_application_id_uri_cc.outputs.application_id_uri }}
+      scopes_applied:
+        value: ${{ jobs.update_agregar_scopes_ac.outputs.scopes_applied }}
+      app_roles_applied:
+        value: ${{ jobs.update_agregar_app_roles_cc.outputs.app_roles_applied }}
+      grant_status:
+        value: ${{ jobs.update_delegar_permisos_graph.outputs.grant_status }}
+      granted_scopes:
+        value: ${{ jobs.update_delegar_permisos_graph.outputs.granted_scopes }}
+      audit_status:
+        value: ${{ jobs.persistir_auditoria_update.outputs.audit_status }}
+      rollback_snapshot_status:
+        value: ${{ jobs.snapshot_estado_previo.outputs.snapshot_status }}
+
+jobs:
+  update_busqueda_app:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      app_id: ${{ steps.search.outputs.app_id }}
+      app_object_id: ${{ steps.search.outputs.app_object_id }}
+      app_type: ${{ steps.search.outputs.app_type }}
+      redirect_uri: ${{ steps.search.outputs.redirect_uri }}
+      scopes_csv: ${{ steps.search.outputs.scopes_csv }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Buscar aplicacion
+        id: search
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=4
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/update/update_search_application_job.py; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Buscar aplicacion fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Buscar aplicacion fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_busqueda_app
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Se encontró la aplicación objetivo para el proceso de actualización.',
+            });
+
+  snapshot_estado_previo:
+    needs: [update_busqueda_app]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      snapshot_status: ${{ steps.snapshot.outputs.snapshot_status }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Guardar estado previo (antes de cualquier cambio)
+        id: snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python ./src/jobs/update/save_pre_update_snapshot_job.py \
+            --ticket-number "${{ inputs.ticket_number }}" \
+            --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" \
+            --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"
+
+      - name: Comentar avance snapshot_estado_previo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Se guardó el estado previo de la app, por si hace falta revertir esta actualización más adelante.',
+            });
+
+  update_configurar_redirect_uri:
+    needs: [update_busqueda_app, snapshot_estado_previo]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      redirect_uri: ${{ steps.redirect.outputs.redirect_uri }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configurar redirect URI
+        id: redirect
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/update/update_configure_redirect_uri_job.py --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --redirect-uri "${{ needs.update_busqueda_app.outputs.redirect_uri }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Configurar redirect URI fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Configurar redirect URI fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_configurar_redirect_uri
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'La redirect URI fue configurada correctamente.',
+            });
+
+  update_agregar_application_id_uri_ac:
+    needs: [update_busqueda_app, update_configurar_redirect_uri]
+    if: ${{ needs.update_busqueda_app.outputs.app_type == 'ac' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      application_id_uri: ${{ steps.appid.outputs.application_id_uri }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Agregar application id uri (AC)
+        id: appid
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/update/update_add_application_id_uri_job.py --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar application id uri (AC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar application id uri (AC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_agregar_application_id_uri_ac
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'El Application ID URI para AC quedó aplicado sin novedad.',
+            });
+
+  update_agregar_scopes_ac:
+    needs: [update_busqueda_app, update_agregar_application_id_uri_ac]
+    if: ${{ needs.update_busqueda_app.outputs.app_type == 'ac' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      scopes_applied: ${{ steps.scopes.outputs.scopes_applied }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Agregar scopes (AC)
+        id: scopes
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/update/update_add_scopes_job.py --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}" --scopes-csv "${{ needs.update_busqueda_app.outputs.scopes_csv }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar scopes (AC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar scopes (AC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_agregar_scopes_ac
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Los scopes de AC ya quedaron configurados correctamente.',
+            });
+
+  update_agregar_application_id_uri_cc:
+    needs: [update_busqueda_app, update_configurar_redirect_uri]
+    if: ${{ needs.update_busqueda_app.outputs.app_type == 'cc' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      application_id_uri: ${{ steps.appid.outputs.application_id_uri }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Agregar application id uri (CC)
+        id: appid
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/update/update_add_application_id_uri_job.py --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar application id uri (CC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar application id uri (CC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_agregar_application_id_uri_cc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'El Application ID URI para CC también quedó listo.',
+            });
+
+  update_agregar_app_roles_cc:
+    needs: [update_busqueda_app, update_agregar_application_id_uri_cc]
+    if: ${{ needs.update_busqueda_app.outputs.app_type == 'cc' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      app_roles_applied: ${{ steps.roles.outputs.app_roles_applied }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Agregar app roles (CC)
+        id: roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/update/update_add_app_roles_job.py --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}" --scopes-csv "${{ needs.update_busqueda_app.outputs.scopes_csv }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar app roles (CC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar app roles (CC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_agregar_app_roles_cc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Los app roles de CC se aplicaron correctamente.',
+            });
+
+  update_delegar_permisos_graph:
+    needs: [update_busqueda_app, update_agregar_scopes_ac, update_agregar_app_roles_cc]
+    if: ${{ needs.update_agregar_scopes_ac.result == 'success' || needs.update_agregar_app_roles_cc.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      grant_status: ${{ steps.delegar.outputs.grant_status }}
+      granted_scopes: ${{ steps.delegar.outputs.granted_scopes }}
+    environment: ${{ inputs.env }}-${{ inputs.tennant }}
+    env:
+      B2CC_INPUT_OPERATION: update
+      B2CC_INPUT_ENV: ${{ inputs.env }}
+      B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
+      B2CC_INPUT_TYPE: ${{ inputs.type }}
+      B2CC_INPUT_NAME: ${{ inputs.name }}
+      B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
+      B2CC_INPUT_WEB_REDIRECT_URI: ${{ inputs.web_redirect_uri }}
+      B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
+      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
+      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Delegar permisos Graph (Update)
+        id: delegar
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/jobs/delegate_graph_permissions_job.py --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Delegar permisos Graph (Update) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Delegar permisos Graph (Update) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Comentar avance update_delegar_permisos_graph
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'Los permisos de Graph quedaron delegados correctamente.',
+            });
+
+  persistir_auditoria_update:
+    needs: [update_busqueda_app, update_configurar_redirect_uri, update_agregar_scopes_ac, update_agregar_app_roles_cc, update_delegar_permisos_graph]
+    if: ${{ always() && (needs.update_agregar_scopes_ac.result == 'success' || needs.update_agregar_app_roles_cc.result == 'success') && needs.update_delegar_permisos_graph.result == 'success' && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      audit_status: ${{ steps.persist.outputs.audit_status }}
+    env:
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Build update audit payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python3 - <<'PY'
+          import datetime as dt
+          import json
+          import re
+
+          def normalize_scopes(raw: str) -> str:
+              raw = str(raw or "").replace("\\n", "\n")
+              tokens = [token.strip() for token in re.split(r"[\s,]+", raw) if token.strip()]
+              seen = set()
+              result = []
+              for token in tokens:
+                  if token in seen:
+                      continue
+                  seen.add(token)
+                  result.append(token)
+              return ",".join(result)
+
+          event = {
+              "operation": "update",
+              "type": "${{ needs.update_busqueda_app.outputs.app_type }}",
+              "Clientcode": "${{ inputs.channel }}",
+              "appcode": "${{ inputs.single_code }}",
+              "clientid": "${{ needs.update_busqueda_app.outputs.app_id }}",
+              "scope": normalize_scopes("${{ inputs.scopes }}"),
+              "userApp": "${{ inputs.user_app }}",
+              "PartitionKey": "${{ inputs.application_name }}",
+              "RowKey": "${{ inputs.tennant }}",
+              "createdAt": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+
+          with open("./artifacts/b2cc_audit_events.jsonl", "w", encoding="utf-8") as fh:
+              fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+          PY
+
+      - name: Persist audit records into Azure Table Storage
+        id: persist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
+            echo "Falta configuracion para Table Storage:"
+            echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
+            exit 1
+          fi
+
+          python ./src/jobs/persist_table_storage.py
+          echo "audit_status=persisted" >> "$GITHUB_OUTPUT"
+
+      - name: Comentar avance persistir_auditoria_update
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.issue_number }}'),
+              body: 'La auditoría de actualización fue guardada en Table Storage.',
+            });

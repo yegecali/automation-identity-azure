@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import logging
 import os
 import sys
@@ -14,8 +13,14 @@ from typing import Any
 logging.basicConfig(level=logging.INFO)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+SRC_DIR = CURRENT_DIR
+while not os.path.isdir(os.path.join(SRC_DIR, "models")):
+    parent = os.path.dirname(SRC_DIR)
+    if parent == SRC_DIR:
+        raise RuntimeError("No se encontro el directorio 'src' (falta el paquete 'models').")
+    SRC_DIR = parent
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from services.graph_service import (
     create_application,
@@ -28,11 +33,19 @@ from models.dto import CreateInputDTO, CreateRuntimeDTO
 from utils.common import (
     build_app_display_name,
     get_obfuscated_secret,
-    load_json_file,
+    load_dispatch_input_from_env,
 )
 from utils.runtime_config import get_env_credentials
 
 VALID_ENVS = {"dev", "cer", "pro"}
+
+
+def set_output(name: str, value: str) -> None:
+    github_output = os.getenv("GITHUB_OUTPUT", "").strip()
+    if not github_output:
+        return
+    with open(github_output, "a", encoding="utf-8") as fh:
+        fh.write(f"{name}={value}\n")
 
 
 def resolve_runtime_values(input_dto: CreateInputDTO) -> CreateRuntimeDTO:
@@ -93,17 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
     - Ninguno.
 
     Pasos funcionales:
-    1. Define input JSON de entrada.
-    2. Define flag opcional para login interactivo.
+    1. Define flag opcional para login interactivo.
     """
     parser = argparse.ArgumentParser(
         description="Create an App Registration equivalent to Create-B2CCAppRegistration.ps1"
-    )
-    parser.add_argument("--input", default="input.json", help="Path to input JSON file")
-    parser.add_argument(
-        "--output-json",
-        default="",
-        help="Path opcional para exportar resultado de la creacion (app id/object id/name/type)",
     )
     parser.add_argument(
         "--use-interactive-az-login",
@@ -113,24 +119,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_create_from_input(
-    input_path: str = "input.json",
-    *,
-    use_interactive_az_login: bool = False,
-    output_json_path: str = "",
-) -> int:
+def run_create_from_input(*, use_interactive_az_login: bool = False) -> int:
     """Ejecuta la creacion/base de App Registration para el flujo create.
 
     Efecto en tenant:
     - Crea o reutiliza App Registration.
 
     Pasos funcionales:
-    1. Autentica con service principal.
-    2. Crea o reutiliza la app destino.
-    3. Valida lectura de la app creada/reutilizada.
-    4. Exporta contexto para jobs posteriores.
+    1. Lee el input del dispatch desde variables de entorno (B2CC_INPUT_*).
+    2. Autentica con service principal.
+    3. Crea o reutiliza la app destino.
+    4. Valida lectura de la app creada/reutilizada.
+    5. Exporta contexto para jobs posteriores via GITHUB_OUTPUT.
     """
-    input_data = load_json_file(input_path)
+    input_data = load_dispatch_input_from_env()
     input_dto = CreateInputDTO.from_dict(input_data)
     runtime = resolve_runtime_values(input_dto)
 
@@ -143,7 +145,6 @@ def run_create_from_input(
     script_start = dt.datetime.now()
     logging.info("[INIT] Inicio de ejecucion: %s", f"{script_start:%Y-%m-%d %H:%M:%S}")
     logging.info("[INIT] Script: Create-B2CCAppRegistration.py")
-    logging.info("[INIT] Input file: %s", input_path)
     logging.info("[INIT] Ambiente objetivo: %s", runtime.env)
     logging.info("[INIT] Tenant objetivo: %s", tenant_id)
     logging.info("[INIT] Tipo de flujo: %s", app_type)
@@ -239,21 +240,10 @@ def run_create_from_input(
     logging.info("      [RESUMEN] AppId creada: %s", new_app_id)
     logging.info("      [RESUMEN] ObjectId creado: %s", new_object_id)
 
-    if output_json_path:
-        output_dir = os.path.dirname(output_json_path)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        payload = {
-            "app_id": str(new_app_id),
-            "app_object_id": str(current_app_object_id),
-            "app_display_name": app_display_name,
-            "app_type": app_type,
-            "tennant": input_dto.tennant,
-            "env": runtime.env,
-        }
-        with open(output_json_path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False)
-        logging.info("      [RESUMEN] Output JSON: %s", output_json_path)
+    set_output("app_id", str(new_app_id))
+    set_output("app_object_id", str(current_app_object_id))
+    set_output("app_display_name", app_display_name)
+    set_output("app_type", app_type)
 
     return 0
 
@@ -261,11 +251,7 @@ def run_create_from_input(
 def main() -> int:
     """Entrada CLI para create; delega en run_create_from_input."""
     args = build_parser().parse_args()
-    return run_create_from_input(
-        input_path=args.input,
-        use_interactive_az_login=args.use_interactive_az_login,
-        output_json_path=args.output_json,
-    )
+    return run_create_from_input(use_interactive_az_login=args.use_interactive_az_login)
 
 
 if __name__ == "__main__":

@@ -11,11 +11,17 @@ import sys
 logging.basicConfig(level=logging.INFO)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+SRC_DIR = CURRENT_DIR
+while not os.path.isdir(os.path.join(SRC_DIR, "models")):
+    parent = os.path.dirname(SRC_DIR)
+    if parent == SRC_DIR:
+        raise RuntimeError("No se encontro el directorio 'src' (falta el paquete 'models').")
+    SRC_DIR = parent
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from services.graph_service import create_service_principal, get_application_by_display_name, get_service_principal_by_app_id, run_az
-from utils.common import build_app_display_name, get_obfuscated_secret, load_json_file
+from utils.common import build_app_display_name, get_obfuscated_secret, load_dispatch_input_from_env
 from utils.runtime_config import get_env_credentials
 
 
@@ -56,11 +62,10 @@ def resolve_app_id(input_data: dict, app_id_from_arg: str) -> tuple[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate/create service principal job")
-    parser.add_argument("--input", default="input.json", help="Path to input JSON")
     parser.add_argument("--app-id", default="", help="Application (client) ID")
     args = parser.parse_args()
 
-    input_data = load_json_file(args.input)
+    input_data = load_dispatch_input_from_env()
     env = str(input_data.get("env", "")).strip().lower()
     tennant = str(input_data.get("tennant") or input_data.get("tenant") or "").strip().lower()
 
