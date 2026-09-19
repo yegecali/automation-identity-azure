@@ -1,0 +1,1667 @@
+name: Run B2CC Automation (Python)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        required: false
+        type: choice
+        options:
+          - "01 - Creación"
+          - "02 - Actualización"
+      operation_label:
+        required: false
+        type: string
+      app_name:
+        required: false
+        type: string
+      env:
+        required: false
+        type: choice
+        options:
+          - "Desarrollo"
+          - "Certificación"
+          - "Producción"
+      tennant:
+        required: false
+        type: choice
+        options:
+          - "B2C Core Persona"
+          - "B2C Core PYME"
+      type:
+        required: false
+        type: choice
+        options:
+          - "AC - Authorization Code con Login Unico"
+          - "CC - Client Credentials"
+      name:
+        required: false
+        type: string
+      ticket_number:
+        required: false
+        type: string # itsm-12345
+      channel:
+        required: false
+        type: string # nhbk
+      webRedirectUri:
+        required: false
+        type: string # https://example.com/redirect
+      scopes:
+        required: false
+        type: string # scope1,scope2,scope3
+      applicationName:
+        required: false
+        type: string # cuando es actualizacion llega AC: b2c-auth-test-ac-client-id o CC: b2c-auth-test-cc-client-id
+      userApp:
+        required: false
+        type: string # nombre de la aplicación del usuario
+      singleCode:
+        required: false
+        type: string # codigo de 2
+jobs:
+  debug_dispatch_inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Imprimir inputs del dispatch
+        shell: bash
+        env:
+          DISPATCH_INPUTS_JSON: ${{ toJson(github.event.inputs) }}
+        run: |
+          set -euo pipefail
+          echo "Inputs recibidos en workflow_dispatch:"
+          echo "$DISPATCH_INPUTS_JSON"
+          echo "operation='${{ github.event.inputs.operation }}'"
+
+  abrir_issue:
+    needs: [debug_dispatch_inputs]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      issue_number: ${{ steps.crear_issue.outputs.issue_number }}
+    steps:
+      - name: Crear issue inicial (open)
+        id: crear_issue
+        uses: actions/github-script@v7
+        env:
+          TICKET_NUMBER: ${{ github.event.inputs.ticket_number }}
+        with:
+          script: |
+            const createdIssue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: process.env.TICKET_NUMBER,
+              body: 'SCRIPT-USER',
+            });
+
+            core.setOutput('issue_number', String(createdIssue.data.number));
+
+  crear_app:
+    needs: [debug_dispatch_inputs]
+    if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == '01 - Creación' }}
+    runs-on: ubuntu-latest
+    outputs:
+      app_id: ${{ steps.export_create_outputs.outputs.app_id }}
+      app_object_id: ${{ steps.export_create_outputs.outputs.app_object_id }}
+      app_display_name: ${{ steps.export_create_outputs.outputs.app_display_name }}
+      app_type: ${{ steps.export_create_outputs.outputs.app_type }}
+      sp_id: ${{ steps.validar_sp.outputs.sp_id }}
+      sp_status: ${{ steps.validar_sp.outputs.sp_status }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build create payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+              "01 - Creación": "create",
+              "02 - Actualización": "update",
+              "create": "create",
+              "update": "update",
+          }
+          env_map = {
+              "Desarrollo": "dev",
+              "Certificación": "cer",
+              "Producción": "pro",
+              "dev": "dev",
+              "cer": "cer",
+              "pro": "pro",
+          }
+          tennant_map = {
+              "B2C Core Persona": "persona",
+              "B2C Core PYME": "pyme",
+              "persona": "persona",
+              "pyme": "pyme",
+          }
+          type_map = {
+              "AC - Authorization Code con Login Unico": "ac",
+              "CC - Client Credentials": "cc",
+              "ac": "ac",
+              "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+              "operation": operation_map.get(raw_operation, raw_operation),
+              "channel": "${{ github.event.inputs.channel }}",
+              "env": env_map.get(raw_env, raw_env),
+              "tennant": tennant_map.get(raw_tennant, raw_tennant),
+              "type": type_map.get(raw_type, raw_type),
+              "name": "${{ github.event.inputs.name }}",
+          }
+
+          with open("./artifacts/dispatch_input_create.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Run create flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=3
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/create_app_registration_job.py --input ./artifacts/dispatch_input_create.json --output-json ./artifacts/create_result.json; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Run create flow fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Run create flow fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Export create outputs
+        id: export_create_outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ./artifacts/create_result.json
+          python - <<'PY'
+          import json
+          import os
+
+          with open('./artifacts/create_result.json', 'r', encoding='utf-8') as fh:
+              data = json.load(fh)
+
+          github_output = os.environ.get('GITHUB_OUTPUT', '')
+          if not github_output:
+              raise RuntimeError('GITHUB_OUTPUT no esta disponible en el job.')
+
+          with open(github_output, 'a', encoding='utf-8') as out:
+              out.write(f"app_id={str(data.get('app_id', '')).strip()}\n")
+              out.write(f"app_object_id={str(data.get('app_object_id', '')).strip()}\n")
+              out.write(f"app_display_name={str(data.get('app_display_name', '')).strip()}\n")
+              out.write(f"app_type={str(data.get('app_type', '')).strip()}\n")
+          PY
+
+      - name: Validar/crear service principal
+        id: validar_sp
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/validate_service_principal_job.py --input ./artifacts/dispatch_input_create.json --app-id "${{ steps.export_create_outputs.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Validar/crear service principal fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Validar/crear service principal fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+      - name: Verificar propagación del SP
+        env:
+          APP_ID: ${{ steps.export_create_outputs.outputs.app_id }}
+          EXPECTED_SP_ID: ${{ steps.validar_sp.outputs.sp_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=12
+          retry_wait_seconds=15
+          attempt=1
+          until python ./src/verify_service_principal_propagation_job.py --input ./artifacts/dispatch_input_create.json --app-id "$APP_ID" --expected-sp-id "$EXPECTED_SP_ID"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Verificar propagacion del SP fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Verificar propagacion del SP fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  delegar_permisos_graph:
+    needs: [crear_app]
+    if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == '01 - Creación' }}
+    runs-on: ubuntu-latest
+    outputs:
+      grant_status: ${{ steps.delegar.outputs.grant_status }}
+      granted_scopes: ${{ steps.delegar.outputs.granted_scopes }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build create payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+              "01 - Creación": "create",
+              "02 - Actualización": "update",
+              "create": "create",
+              "update": "update",
+          }
+          env_map = {
+              "Desarrollo": "dev",
+              "Certificación": "cer",
+              "Producción": "pro",
+              "dev": "dev",
+              "cer": "cer",
+              "pro": "pro",
+          }
+          tennant_map = {
+              "B2C Core Persona": "persona",
+              "B2C Core PYME": "pyme",
+              "persona": "persona",
+              "pyme": "pyme",
+          }
+          type_map = {
+              "AC - Authorization Code con Login Unico": "ac",
+              "CC - Client Credentials": "cc",
+              "ac": "ac",
+              "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+              "operation": operation_map.get(raw_operation, raw_operation),
+              "channel": "${{ github.event.inputs.channel }}",
+              "env": env_map.get(raw_env, raw_env),
+              "tennant": tennant_map.get(raw_tennant, raw_tennant),
+              "type": type_map.get(raw_type, raw_type),
+              "name": "${{ github.event.inputs.name }}",
+          }
+
+          with open("./artifacts/dispatch_input_create.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Delegar permisos Graph
+        id: delegar
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/delegate_graph_permissions_job.py --input ./artifacts/dispatch_input_create.json --app-id "${{ needs.crear_app.outputs.app_id }}" --app-sp-id "${{ needs.crear_app.outputs.sp_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Delegar permisos Graph fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Delegar permisos Graph fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  crear_client_secret_cc:
+    needs: [crear_app, delegar_permisos_graph]
+    if: ${{ (github.event.inputs.operation == 'create' || github.event.inputs.operation == '01 - Creación') && needs.crear_app.outputs.app_type == 'cc' }}
+    runs-on: ubuntu-latest
+    outputs:
+      secret_status: ${{ steps.crear_secret.outputs.secret_status }}
+      client_secret_obfuscated: ${{ steps.crear_secret.outputs.client_secret_obfuscated }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build create payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+              "01 - Creación": "create",
+              "02 - Actualización": "update",
+              "create": "create",
+              "update": "update",
+          }
+          env_map = {
+              "Desarrollo": "dev",
+              "Certificación": "cer",
+              "Producción": "pro",
+              "dev": "dev",
+              "cer": "cer",
+              "pro": "pro",
+          }
+          tennant_map = {
+              "B2C Core Persona": "persona",
+              "B2C Core PYME": "pyme",
+              "persona": "persona",
+              "pyme": "pyme",
+          }
+          type_map = {
+              "AC - Authorization Code con Login Unico": "ac",
+              "CC - Client Credentials": "cc",
+              "ac": "ac",
+              "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+              "operation": operation_map.get(raw_operation, raw_operation),
+              "channel": "${{ github.event.inputs.channel }}",
+              "env": env_map.get(raw_env, raw_env),
+              "tennant": tennant_map.get(raw_tennant, raw_tennant),
+              "type": type_map.get(raw_type, raw_type),
+              "name": "${{ github.event.inputs.name }}",
+          }
+
+          with open("./artifacts/dispatch_input_create.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Crear client secret para CC
+        id: crear_secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=4
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/create_cc_client_secret_job.py --input ./artifacts/dispatch_input_create.json --app-object-id "${{ needs.crear_app.outputs.app_object_id }}" --app-name "${{ needs.crear_app.outputs.app_display_name }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Crear client secret para CC fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Crear client secret para CC fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  persistir_auditoria_create:
+    needs: [crear_app, delegar_permisos_graph, crear_client_secret_cc]
+    if: ${{ always() && (github.event.inputs.operation == 'create' || github.event.inputs.operation == '01 - Creación') && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Build create audit payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import re
+
+          def normalize_scopes(raw: str) -> str:
+              raw = str(raw or "").replace("\\n", "\n")
+              tokens = [token.strip() for token in re.split(r"[\s,]+", raw) if token.strip()]
+              seen = set()
+              result = []
+              for token in tokens:
+                  if token in seen:
+                      continue
+                  seen.add(token)
+                  result.append(token)
+              return ",".join(result)
+
+          event = {
+              "operation": "create",
+              "type": "${{ needs.crear_app.outputs.app_type }}",
+              "Clientcode": "${{ github.event.inputs.channel }}",
+              "appcode": "${{ github.event.inputs.singleCode }}",
+              "clientid": "${{ needs.crear_app.outputs.app_id }}",
+              "scope": normalize_scopes("${{ needs.delegar_permisos_graph.outputs.granted_scopes }}"),
+              "userApp": "${{ github.event.inputs.userApp }}",
+              "PartitionKey": "${{ needs.crear_app.outputs.app_display_name }}",
+              "RowKey": "${{ github.event.inputs.tennant }}",
+              "createdAt": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+
+          with open("./artifacts/b2cc_audit_events.jsonl", "w", encoding="utf-8") as fh:
+              fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+          PY
+
+      - name: Persist audit records into Azure Table Storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
+            echo "Falta configuracion para Table Storage:"
+            echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
+            exit 1
+          fi
+
+          python ./src/persist_table_storage.py
+
+  update_busqueda_app:
+    needs: [debug_dispatch_inputs]
+    if: ${{ github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización' }}
+    runs-on: ubuntu-latest
+    outputs:
+      app_id: ${{ steps.search.outputs.app_id }}
+      app_object_id: ${{ steps.search.outputs.app_object_id }}
+      app_type: ${{ steps.search.outputs.app_type }}
+      redirect_uri: ${{ steps.search.outputs.redirect_uri }}
+      scopes_csv: ${{ steps.search.outputs.scopes_csv }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Buscar aplicacion
+        id: search
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=4
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/update_search_application_job.py --input ./artifacts/dispatch_input_update.json; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Buscar aplicacion fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Buscar aplicacion fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  update_configurar_redirect_uri:
+    needs: [update_busqueda_app]
+    if: ${{ github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización' }}
+    runs-on: ubuntu-latest
+    outputs:
+      redirect_uri: ${{ steps.redirect.outputs.redirect_uri }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Configurar redirect URI
+        id: redirect
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/update_configure_redirect_uri_job.py --input ./artifacts/dispatch_input_update.json --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --redirect-uri "${{ needs.update_busqueda_app.outputs.redirect_uri }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Configurar redirect URI fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Configurar redirect URI fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  update_agregar_application_id_uri_ac:
+    needs: [update_busqueda_app, update_configurar_redirect_uri]
+    if: ${{ (github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización') && needs.update_busqueda_app.outputs.app_type == 'ac' }}
+    runs-on: ubuntu-latest
+    outputs:
+      application_id_uri: ${{ steps.appid.outputs.application_id_uri }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Agregar application id uri (AC)
+        id: appid
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/update_add_application_id_uri_job.py --input ./artifacts/dispatch_input_update.json --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar application id uri (AC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar application id uri (AC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  update_agregar_scopes_ac:
+    needs: [update_busqueda_app, update_agregar_application_id_uri_ac]
+    if: ${{ (github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización') && needs.update_busqueda_app.outputs.app_type == 'ac' }}
+    runs-on: ubuntu-latest
+    outputs:
+      scopes_applied: ${{ steps.scopes.outputs.scopes_applied }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Agregar scopes (AC)
+        id: scopes
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/update_add_scopes_job.py --input ./artifacts/dispatch_input_update.json --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}" --scopes-csv "${{ needs.update_busqueda_app.outputs.scopes_csv }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar scopes (AC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar scopes (AC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  update_agregar_application_id_uri_cc:
+    needs: [update_busqueda_app, update_configurar_redirect_uri]
+    if: ${{ (github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización') && needs.update_busqueda_app.outputs.app_type == 'cc' }}
+    runs-on: ubuntu-latest
+    outputs:
+      application_id_uri: ${{ steps.appid.outputs.application_id_uri }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Agregar application id uri (CC)
+        id: appid
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/update_add_application_id_uri_job.py --input ./artifacts/dispatch_input_update.json --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar application id uri (CC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar application id uri (CC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  update_agregar_app_roles_cc:
+    needs: [update_busqueda_app, update_agregar_application_id_uri_cc]
+    if: ${{ (github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización') && needs.update_busqueda_app.outputs.app_type == 'cc' }}
+    runs-on: ubuntu-latest
+    outputs:
+      app_roles_applied: ${{ steps.roles.outputs.app_roles_applied }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Agregar app roles (CC)
+        id: roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=6
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/update_add_app_roles_job.py --input ./artifacts/dispatch_input_update.json --app-object-id "${{ needs.update_busqueda_app.outputs.app_object_id }}" --app-id "${{ needs.update_busqueda_app.outputs.app_id }}" --scopes-csv "${{ needs.update_busqueda_app.outputs.scopes_csv }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Agregar app roles (CC) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Agregar app roles (CC) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  update_delegar_permisos_graph:
+    needs: [update_busqueda_app, update_agregar_scopes_ac, update_agregar_app_roles_cc]
+    if: ${{ (github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización') && (needs.update_agregar_scopes_ac.result == 'success' || needs.update_agregar_app_roles_cc.result == 'success') }}
+    runs-on: ubuntu-latest
+    outputs:
+      grant_status: ${{ steps.delegar.outputs.grant_status }}
+      granted_scopes: ${{ steps.delegar.outputs.granted_scopes }}
+    env:
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build update payload from dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import json
+
+          operation_map = {
+            "01 - Creación": "create",
+            "02 - Actualización": "update",
+            "create": "create",
+            "update": "update",
+          }
+          env_map = {
+            "Desarrollo": "dev",
+            "Certificación": "cer",
+            "Producción": "pro",
+            "dev": "dev",
+            "cer": "cer",
+            "pro": "pro",
+          }
+          tennant_map = {
+            "B2C Core Persona": "persona",
+            "B2C Core PYME": "pyme",
+            "persona": "persona",
+            "pyme": "pyme",
+          }
+          type_map = {
+            "AC - Authorization Code con Login Unico": "ac",
+            "CC - Client Credentials": "cc",
+            "ac": "ac",
+            "cc": "cc",
+          }
+
+          raw_operation = "${{ github.event.inputs.operation }}".strip()
+          raw_env = "${{ github.event.inputs.env }}".strip()
+          raw_tennant = "${{ github.event.inputs.tennant }}".strip()
+          raw_type = "${{ github.event.inputs.type }}".strip()
+
+          payload = {
+            "operation": operation_map.get(raw_operation, raw_operation),
+            "env": env_map.get(raw_env, raw_env),
+            "tennant": tennant_map.get(raw_tennant, raw_tennant),
+            "type": type_map.get(raw_type, raw_type),
+            "name": "${{ github.event.inputs.name }}",
+            "applicationName": "${{ github.event.inputs.applicationName }}",
+            "webRedirectUri": "${{ github.event.inputs.webRedirectUri }}",
+            "scopes": ${{ toJson(github.event.inputs.scopes) }},
+          }
+
+          with open("./artifacts/dispatch_input_update.json", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+          PY
+
+      - name: Delegar permisos Graph (Update)
+        id: delegar
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          retry_wait_seconds=10
+          attempt=1
+          until python ./src/delegate_graph_permissions_job.py --input ./artifacts/dispatch_input_update.json --app-id "${{ needs.update_busqueda_app.outputs.app_id }}"; do
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Delegar permisos Graph (Update) fallo tras ${max_attempts} intentos."
+              exit 1
+            fi
+            echo "Delegar permisos Graph (Update) fallo en intento ${attempt}/${max_attempts}. Reintentando en ${retry_wait_seconds}s..."
+            attempt=$((attempt + 1))
+            sleep "$retry_wait_seconds"
+          done
+
+  persistir_auditoria_update:
+    needs: [update_busqueda_app, update_configurar_redirect_uri, update_agregar_scopes_ac, update_agregar_app_roles_cc, update_delegar_permisos_graph]
+    if: ${{ always() && (github.event.inputs.operation == 'update' || github.event.inputs.operation == '02 - Actualización') && (needs.update_agregar_scopes_ac.result == 'success' || needs.update_agregar_app_roles_cc.result == 'success') && needs.update_delegar_permisos_graph.result == 'success' && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install persistence dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install azure-data-tables==12.7.0
+
+      - name: Build update audit payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifacts
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import re
+
+          def normalize_scopes(raw: str) -> str:
+              raw = str(raw or "").replace("\\n", "\n")
+              tokens = [token.strip() for token in re.split(r"[\s,]+", raw) if token.strip()]
+              seen = set()
+              result = []
+              for token in tokens:
+                  if token in seen:
+                      continue
+                  seen.add(token)
+                  result.append(token)
+              return ",".join(result)
+
+          event = {
+              "operation": "update",
+              "type": "${{ needs.update_busqueda_app.outputs.app_type }}",
+              "Clientcode": "${{ github.event.inputs.channel }}",
+              "appcode": "${{ github.event.inputs.singleCode }}",
+              "clientid": "${{ needs.update_busqueda_app.outputs.app_id }}",
+              "scope": normalize_scopes("${{ github.event.inputs.scopes }}"),
+              "userApp": "${{ github.event.inputs.userApp }}",
+              "PartitionKey": "${{ github.event.inputs.applicationName }}",
+              "RowKey": "${{ github.event.inputs.tennant }}",
+              "createdAt": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+          }
+
+          with open("./artifacts/b2cc_audit_events.jsonl", "w", encoding="utf-8") as fh:
+              fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+          PY
+
+      - name: Persist audit records into Azure Table Storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
+            echo "Falta configuracion para Table Storage:"
+            echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
+            exit 1
+          fi
+
+          python ./src/persist_table_storage.py
+
+  comentar_crear_app:
+    needs: [abrir_issue, crear_app]
+    if: ${{ needs.crear_app.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance crear_app
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'La aplicación ya fue creada correctamente. Seguimos con los permisos.',
+            });
+
+  comentar_delegar_permisos_graph:
+    needs: [abrir_issue, delegar_permisos_graph]
+    if: ${{ needs.delegar_permisos_graph.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance delegar_permisos_graph
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'Los permisos en Graph quedaron aplicados correctamente.',
+            });
+
+  comentar_crear_client_secret_cc:
+    needs: [abrir_issue, crear_client_secret_cc]
+    if: ${{ needs.crear_client_secret_cc.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance crear_client_secret_cc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'El client secret se generó correctamente para el flujo CC.',
+            });
+
+  comentar_persistir_auditoria_create:
+    needs: [abrir_issue, persistir_auditoria_create]
+    if: ${{ needs.persistir_auditoria_create.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance persistir_auditoria_create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'La auditoría de creación quedó guardada en Table Storage.',
+            });
+
+  comentar_update_busqueda_app:
+    needs: [abrir_issue, update_busqueda_app]
+    if: ${{ needs.update_busqueda_app.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance update_busqueda_app
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'Se encontró la aplicación objetivo para el proceso de actualización.',
+            });
+
+  comentar_update_configurar_redirect_uri:
+    needs: [abrir_issue, update_configurar_redirect_uri]
+    if: ${{ needs.update_configurar_redirect_uri.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance update_configurar_redirect_uri
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'La redirect URI fue configurada correctamente.',
+            });
+
+  comentar_update_agregar_application_id_uri_ac:
+    needs: [abrir_issue, update_agregar_application_id_uri_ac]
+    if: ${{ needs.update_agregar_application_id_uri_ac.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance update_agregar_application_id_uri_ac
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'El Application ID URI para AC quedó aplicado sin novedad.',
+            });
+
+  comentar_update_agregar_scopes_ac:
+    needs: [abrir_issue, update_agregar_scopes_ac]
+    if: ${{ needs.update_agregar_scopes_ac.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance update_agregar_scopes_ac
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'Los scopes de AC ya quedaron configurados correctamente.',
+            });
+
+  comentar_update_agregar_application_id_uri_cc:
+    needs: [abrir_issue, update_agregar_application_id_uri_cc]
+    if: ${{ needs.update_agregar_application_id_uri_cc.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance update_agregar_application_id_uri_cc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'El Application ID URI para CC también quedó listo.',
+            });
+
+  comentar_update_agregar_app_roles_cc:
+    needs: [abrir_issue, update_agregar_app_roles_cc]
+    if: ${{ needs.update_agregar_app_roles_cc.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance update_agregar_app_roles_cc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'Los app roles de CC se aplicaron correctamente.',
+            });
+
+  comentar_persistir_auditoria_update:
+    needs: [abrir_issue, persistir_auditoria_update]
+    if: ${{ needs.persistir_auditoria_update.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comentar avance persistir_auditoria_update
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.abrir_issue.outputs.issue_number }}'),
+              body: 'La auditoría de actualización fue guardada en Table Storage.',
+            });
+
+  notificar_issue:
+    needs: [abrir_issue, crear_app, delegar_permisos_graph, crear_client_secret_cc, persistir_auditoria_create, update_busqueda_app, update_configurar_redirect_uri, update_agregar_application_id_uri_ac, update_agregar_scopes_ac, update_agregar_application_id_uri_cc, update_agregar_app_roles_cc, persistir_auditoria_update]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Actualizar issue con resultado final
+        uses: actions/github-script@v7
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+          ISSUE_NUMBER: ${{ needs.abrir_issue.outputs.issue_number }}
+        with:
+          script: |
+            const needs = JSON.parse(process.env.NEEDS_JSON || '{}');
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+
+            const failedJobs = Object.entries(needs)
+              .filter(([jobName, jobData]) => jobName !== 'abrir_issue' && jobData?.result === 'failure')
+              .map(([jobName]) => jobName);
+
+            const isSuccess = needs.delegar_permisos_graph?.result === 'success' || needs.persistir_auditoria_update?.result === 'success';
+
+            if (failedJobs.length > 0) {
+              const body = [
+                'SCRIPT-ERROR',
+                '',
+                '### detalles',
+                `Se presentó un error durante la ejecución en: ${failedJobs.join(', ')}`,
+              ].join('\n');
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+                state: 'closed',
+              });
+
+              return;
+            }
+
+            if (isSuccess) {
+              const clientId = needs.crear_app?.outputs?.app_id || 'N/A';
+              const clientSecretAlias = needs.crear_client_secret_cc?.outputs?.client_secret_obfuscated || 'N/A';
+              const grants = needs.delegar_permisos_graph?.outputs?.granted_scopes || 'N/A';
+              const savedInTableStorage =
+                needs.persistir_auditoria_create?.result === 'success' || needs.persistir_auditoria_update?.result === 'success'
+                  ? 'SI'
+                  : 'NO';
+
+              const body = [
+                'SCRIPT-SUCCESSFULL',
+                '',
+                '### detalles',
+                `Client ID creado: ${clientId}`,
+                `Alias del client secret: ${clientSecretAlias}`,
+                `Grants aplicados: ${grants}`,
+                `Se guardó en Table Storage: ${savedInTableStorage}`,
+              ].join('\n');
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+                state: 'closed',
+              });
+
+              return;
+            }
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: 'SCRIPT-USER',
+              state: 'closed',
+            });
