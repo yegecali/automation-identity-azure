@@ -39,6 +39,7 @@ jobs:
   validar_inputs_update:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       app_found: ${{ steps.validar.outputs.app_found }}

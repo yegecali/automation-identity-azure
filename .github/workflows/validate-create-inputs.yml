@@ -32,6 +32,7 @@ jobs:
   validar_inputs_create:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       client_id_exists: ${{ steps.validar.outputs.client_id_exists }}

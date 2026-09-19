@@ -12,6 +12,7 @@ jobs:
   abrir_issue:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       issue_number: ${{ steps.crear_issue.outputs.issue_number }}
@@ -36,6 +37,7 @@ jobs:
     needs: [abrir_issue]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       env: ${{ steps.find.outputs.env }}
@@ -83,6 +85,7 @@ jobs:
     needs: [abrir_issue, buscar_snapshot]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     environment: ${{ needs.buscar_snapshot.outputs.env }}-${{ needs.buscar_snapshot.outputs.tennant }}
     outputs:
@@ -147,6 +150,7 @@ jobs:
     if: ${{ needs.revertir_creacion.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     env:
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
@@ -225,6 +229,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     steps:
       - name: Cerrar issue de reversión

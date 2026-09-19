@@ -75,6 +75,7 @@ jobs:
   update_busqueda_app:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       app_id: ${{ steps.search.outputs.app_id }}
@@ -137,6 +138,7 @@ jobs:
     needs: [update_busqueda_app]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       snapshot_status: ${{ steps.snapshot.outputs.snapshot_status }}
@@ -196,6 +198,7 @@ jobs:
     needs: [update_busqueda_app, snapshot_estado_previo]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       redirect_uri: ${{ steps.redirect.outputs.redirect_uri }}
@@ -255,6 +258,7 @@ jobs:
     if: ${{ needs.update_busqueda_app.outputs.app_type == 'ac' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       application_id_uri: ${{ steps.appid.outputs.application_id_uri }}
@@ -314,6 +318,7 @@ jobs:
     if: ${{ needs.update_busqueda_app.outputs.app_type == 'ac' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       scopes_applied: ${{ steps.scopes.outputs.scopes_applied }}
@@ -373,6 +378,7 @@ jobs:
     if: ${{ needs.update_busqueda_app.outputs.app_type == 'cc' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       application_id_uri: ${{ steps.appid.outputs.application_id_uri }}
@@ -432,6 +438,7 @@ jobs:
     if: ${{ needs.update_busqueda_app.outputs.app_type == 'cc' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       app_roles_applied: ${{ steps.roles.outputs.app_roles_applied }}
@@ -491,6 +498,7 @@ jobs:
     if: ${{ needs.update_agregar_scopes_ac.result == 'success' || needs.update_agregar_app_roles_cc.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       grant_status: ${{ steps.delegar.outputs.grant_status }}
@@ -551,6 +559,7 @@ jobs:
     if: ${{ always() && (needs.update_agregar_scopes_ac.result == 'success' || needs.update_agregar_app_roles_cc.result == 'success') && needs.update_delegar_permisos_graph.result == 'success' && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       audit_status: ${{ steps.persist.outputs.audit_status }}
