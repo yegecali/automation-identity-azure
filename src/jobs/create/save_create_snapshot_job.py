@@ -67,10 +67,10 @@ def main() -> int:
     tennant = str(input_data.get("tennant") or input_data.get("tenant") or "").strip().lower()
 
     connection_string = os.getenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "").strip()
-    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME", "").strip()
+    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "").strip()
     if not connection_string or not table_name:
         raise RuntimeError(
-            "Faltan AZURE_TABLE_STORAGE_CONNECTION_STRING o AZURE_TABLE_STORAGE_TABLE_NAME "
+            "Faltan AZURE_TABLE_STORAGE_CONNECTION_STRING o AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT "
             "para guardar el snapshot de rollback."
         )
 

@@ -13,7 +13,7 @@ class TestMain:
         monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-1")
         monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-1")
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "history")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "history")
         monkeypatch.setenv("B2CC_INPUT_OPERATION", "update")
         monkeypatch.setenv("B2CC_INPUT_ENV", "dev")
         monkeypatch.setenv("B2CC_INPUT_TENNANT", "persona")
@@ -65,7 +65,7 @@ class TestMain:
 
     def test_raises_when_table_storage_config_missing(self, monkeypatch, tmp_path):
         self._set_common_env(monkeypatch, tmp_path)
-        monkeypatch.delenv("AZURE_TABLE_STORAGE_TABLE_NAME", raising=False)
+        monkeypatch.delenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", raising=False)
         monkeypatch.setattr(
             sys,
             "argv",

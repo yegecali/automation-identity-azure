@@ -244,13 +244,20 @@ Además se usa una única connection string, `AZURE_TABLE_STORAGE_CONNECTION_STR
 dos tablas distintas dentro de la misma cuenta de storage — cada una con su propio nombre en un
 repo/environment variable:
 
-| Uso | Variable | Jobs |
-|---|---|---|
-| Auditoría (log de eventos) | `AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT` | `persistir_auditoria_create`, `persistir_auditoria_update`, `persistir_auditoria_revert` |
-| Rollback (snapshot de estado previo) | `AZURE_TABLE_STORAGE_TABLE_NAME` | `guardar_snapshot_create`, `snapshot_estado_previo`, `buscar_snapshot`, `revertir_creacion`, `revertir_actualizacion` |
+| Uso | Variable | Jobs | Schema mínimo de la entidad |
+|---|---|---|---|
+| Auditoría (log de eventos) | `AZURE_TABLE_STORAGE_TABLE_NAME` | `persistir_auditoria_create`, `persistir_auditoria_update`, `persistir_auditoria_revert` | `PartitionKey`, `RowKey`, `operation`, `type`, `ClientCode`, `appCode`, `clientId`, `scope`, `userApp`, `createdAt` |
+| Rollback (snapshot de estado previo) | `AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT` | `guardar_snapshot_create`, `snapshot_estado_previo`, `buscar_snapshot`, `revertir_creacion`, `revertir_actualizacion` | `PartitionKey` (=ticket_number), `RowKey` (=`createdAt_runId`), `operation`, `env`, `tennant`, `applicationName`, `appId`, `appObjectId`, `spId`, `runId`, `runUrl`, `createdAt`, `reverted`, `revertedAt`, `revertedRunId`, `beforeManifestJson`*, `afterSummaryJson`* (*solo en snapshots de update) |
+
+`build_entity()` en `persist_table_storage.py` también escribe alias legacy en minúsculas
+(`Clientcode`, `appcode`, `clientid`, `scopes`) junto a los campos de arriba, para no romper
+lecturas existentes sobre filas antiguas de la tabla de auditoría.
 
 Ambas variables deben existir antes de usar create/update, si no los jobs correspondientes
-fallarán por falta de configuración.
+fallarán por falta de configuración. Azure Table Storage no obliga un schema fijo (es NoSQL,
+schema-less por fila), así que estas columnas no hay que "crearlas" de antemano en el portal —
+basta con que la tabla exista; las columnas aparecen solas en la primera fila que se inserte con
+esos campos.
 
 ## Dependencias
 

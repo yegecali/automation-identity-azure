@@ -20,6 +20,8 @@ while not os.path.isdir(os.path.join(SRC_DIR, "models")):
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+from azure.data.tables import UpdateMode
+
 from services.table_storage_client import (
     build_table_service_client_from_sas,
     connect_table,
@@ -84,9 +86,11 @@ def build_entity(event: dict[str, Any]) -> dict[str, Any]:
     app_type = str(event.get("type", "")).strip().lower()
     partition_key = _resolve_partition_key(event)
     row_key = _resolve_row_key(event)
-    client_code = str(event.get("Clientcode") or event.get("clientCode") or event.get("channel") or "").strip()
-    app_code = str(event.get("appcode") or event.get("appCode") or event.get("singleCode") or "").strip()
-    client_id = str(event.get("clientid") or event.get("clientId") or "").strip()
+    client_code = str(
+        event.get("ClientCode") or event.get("Clientcode") or event.get("clientCode") or event.get("channel") or ""
+    ).strip()
+    app_code = str(event.get("appCode") or event.get("appcode") or event.get("singleCode") or "").strip()
+    client_id = str(event.get("clientId") or event.get("clientid") or "").strip()
     scope = _normalize_scopes(event.get("scope") or event.get("scopes") or "")
     user_app = str(event.get("userApp") or "").strip()
     created_at = str(event.get("createdAt") or "").strip()
@@ -96,9 +100,9 @@ def build_entity(event: dict[str, Any]) -> dict[str, Any]:
         "RowKey": row_key,
         "operation": operation,
         "type": app_type,
-        "Clientcode": client_code,
-        "appcode": app_code,
-        "clientid": client_id,
+        "ClientCode": client_code,
+        "appCode": app_code,
+        "clientId": client_id,
         "scope": scope,
         "userApp": user_app,
     }
@@ -106,8 +110,11 @@ def build_entity(event: dict[str, Any]) -> dict[str, Any]:
     if created_at:
         entity["createdAt"] = created_at
 
-    # Mantener nombres legacy para consultas existentes.
-    entity["clientId"] = client_id
+    # Mantener nombres legacy (minusculas) para consultas/reportes existentes
+    # sobre filas antiguas de la tabla.
+    entity["Clientcode"] = client_code
+    entity["appcode"] = app_code
+    entity["clientid"] = client_id
     entity["scopes"] = scope
 
     return entity
@@ -115,14 +122,14 @@ def build_entity(event: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     connection_string = os.getenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "").strip()
-    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "").strip()
+    table_name = os.getenv("AZURE_TABLE_STORAGE_TABLE_NAME", "").strip()
     audit_file = os.getenv("B2CC_AUDIT_FILE", "./b2cc_audit_events.jsonl").strip()
     create_table_if_missing = _to_bool(os.getenv("B2CC_CREATE_TABLE_IF_MISSING", "false"))
 
     if not connection_string:
         raise RuntimeError("Falta AZURE_TABLE_STORAGE_CONNECTION_STRING.")
     if not table_name:
-        raise RuntimeError("Falta AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT.")
+        raise RuntimeError("Falta AZURE_TABLE_STORAGE_TABLE_NAME.")
 
     logging.info("[TABLE] Crear tabla si falta: %s", create_table_if_missing)
     events = load_audit_events(audit_file)
@@ -144,7 +151,7 @@ def main() -> int:
             logging.info("[TABLE] Evento ignorado por RowKey vacio")
             continue
 
-        table.upsert_entity(entity=entity, mode="MERGE")
+        table.upsert_entity(entity=entity, mode=UpdateMode.MERGE)
         persisted += 1
 
     logging.info("[TABLE] Registros persistidos (upsert): %s", persisted)

@@ -21,6 +21,8 @@ import json
 import logging
 from typing import Any
 
+from azure.data.tables import UpdateMode
+
 logging.basicConfig(level=logging.INFO)
 
 CREATE_OPERATION = "create"
@@ -135,7 +137,7 @@ def save_snapshot(table: Any, entity: dict[str, Any]) -> None:
     Efecto en tenant:
     - Ninguno sobre Azure AD/Graph. Escribe una fila en Table Storage.
     """
-    table.upsert_entity(entity=entity, mode="MERGE")
+    table.upsert_entity(entity=entity, mode=UpdateMode.MERGE)
 
 
 def query_snapshots_for_ticket(table: Any, ticket_number: str) -> list[dict[str, Any]]:
@@ -182,4 +184,4 @@ def mark_snapshot_reverted(
         "revertedAt": reverted_at or dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "revertedRunId": str(reverted_run_id or "").strip(),
     }
-    table.update_entity(entity=update, mode="MERGE")
+    table.update_entity(entity=update, mode=UpdateMode.MERGE)

@@ -85,9 +85,9 @@ class TestBuildEntity:
         event = {
             "operation": "create",
             "type": "cc",
-            "Clientcode": "nhbk",
-            "appcode": "ab",
-            "clientid": "client-123",
+            "ClientCode": "nhbk",
+            "appCode": "ab",
+            "clientId": "client-123",
             "scope": "scope.a,scope.b",
             "userApp": "juan.perez",
             "PartitionKey": "b2c-nhbk-miapp-cc-client-id",
@@ -101,14 +101,16 @@ class TestBuildEntity:
         assert entity["RowKey"] == "persona"
         assert entity["operation"] == "create"
         assert entity["type"] == "cc"
-        assert entity["Clientcode"] == "nhbk"
-        assert entity["appcode"] == "ab"
-        assert entity["clientid"] == "client-123"
+        assert entity["ClientCode"] == "nhbk"
+        assert entity["appCode"] == "ab"
+        assert entity["clientId"] == "client-123"
         assert entity["scope"] == "scope.a,scope.b"
         assert entity["userApp"] == "juan.perez"
         assert entity["createdAt"] == "2026-01-01T00:00:00Z"
-        # Legacy aliases kept for existing consumers.
-        assert entity["clientId"] == "client-123"
+        # Legacy (lowercase) aliases kept for existing consumers/rows.
+        assert entity["Clientcode"] == "nhbk"
+        assert entity["appcode"] == "ab"
+        assert entity["clientid"] == "client-123"
         assert entity["scopes"] == "scope.a,scope.b"
 
     def test_omits_created_at_when_absent(self):
@@ -120,17 +122,17 @@ class TestBuildEntity:
         event = {
             "applicationName": "legacy-app",
             "tennant": "pyme",
-            "clientCode": "nhbk",
-            "appCode": "ab",
-            "clientId": "client-legacy",
+            "Clientcode": "nhbk",
+            "appcode": "ab",
+            "clientid": "client-legacy",
             "scopes": "scope.a",
         }
         entity = pts.build_entity(event)
         assert entity["PartitionKey"] == "legacy-app"
         assert entity["RowKey"] == "pyme"
-        assert entity["Clientcode"] == "nhbk"
-        assert entity["appcode"] == "ab"
-        assert entity["clientid"] == "client-legacy"
+        assert entity["ClientCode"] == "nhbk"
+        assert entity["appCode"] == "ab"
+        assert entity["clientId"] == "client-legacy"
         assert entity["scope"] == "scope.a"
 
 
@@ -169,19 +171,19 @@ class FakeUpsertTable:
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path, audit_file):
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "audit")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "audit")
         monkeypatch.setenv("B2CC_AUDIT_FILE", str(audit_file))
 
     def test_raises_when_connection_string_missing(self, monkeypatch, tmp_path):
         monkeypatch.delenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", raising=False)
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "audit")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "audit")
         with pytest.raises(RuntimeError, match="Falta AZURE_TABLE_STORAGE_CONNECTION_STRING"):
             pts.main()
 
     def test_raises_when_table_name_missing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.delenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", raising=False)
-        with pytest.raises(RuntimeError, match="Falta AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT"):
+        monkeypatch.delenv("AZURE_TABLE_STORAGE_TABLE_NAME", raising=False)
+        with pytest.raises(RuntimeError, match="Falta AZURE_TABLE_STORAGE_TABLE_NAME"):
             pts.main()
 
     def test_returns_early_when_no_events_to_persist(self, monkeypatch, tmp_path):

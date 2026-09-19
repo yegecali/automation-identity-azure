@@ -10,7 +10,7 @@ import jobs.revert.find_snapshot_env_job as find_job
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path):
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
-        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME", "history")
+        monkeypatch.setenv("AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT", "history")
         output_file = tmp_path / "github_output.txt"
         monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
         return output_file

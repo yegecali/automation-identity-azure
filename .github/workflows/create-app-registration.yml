@@ -195,7 +195,7 @@ jobs:
       B2CC_INPUT_TYPE: ${{ inputs.type }}
       B2CC_INPUT_NAME: ${{ inputs.name }}
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
-      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
+      AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -394,7 +394,7 @@ jobs:
       audit_status: ${{ steps.persist.outputs.audit_status }}
     env:
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
-      AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT }}
+      AZURE_TABLE_STORAGE_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_TABLE_NAME }}
       B2CC_AUDIT_FILE: ./artifacts/b2cc_audit_events.jsonl
     steps:
       - name: Checkout
@@ -437,9 +437,9 @@ jobs:
           event = {
               "operation": "create",
               "type": "${{ needs.crear_app.outputs.app_type }}",
-              "Clientcode": "${{ inputs.channel }}",
-              "appcode": "${{ inputs.single_code }}",
-              "clientid": "${{ needs.crear_app.outputs.app_id }}",
+              "ClientCode": "${{ inputs.channel }}",
+              "appCode": "${{ inputs.single_code }}",
+              "clientId": "${{ needs.crear_app.outputs.app_id }}",
               "scope": normalize_scopes("${{ needs.delegar_permisos_graph.outputs.granted_scopes }}"),
               "userApp": "${{ inputs.user_app }}",
               "PartitionKey": "${{ needs.crear_app.outputs.app_display_name }}",
@@ -456,10 +456,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT:-}" ]]; then
+          if [[ -z "${AZURE_TABLE_STORAGE_CONNECTION_STRING:-}" || -z "${AZURE_TABLE_STORAGE_TABLE_NAME:-}" ]]; then
             echo "Falta configuracion para Table Storage:"
             echo "- Secret requerido: AZURE_TABLE_STORAGE_CONNECTION_STRING"
-            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT"
+            echo "- Variable requerida: AZURE_TABLE_STORAGE_TABLE_NAME"
             exit 1
           fi
 
