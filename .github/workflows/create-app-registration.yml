@@ -68,6 +68,7 @@ jobs:
   crear_app:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       app_id: ${{ steps.run_create_flow.outputs.app_id }}
@@ -168,6 +169,7 @@ jobs:
     if: ${{ needs.crear_app.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       snapshot_status: ${{ steps.snapshot.outputs.snapshot_status }}
@@ -224,6 +226,7 @@ jobs:
     needs: [crear_app]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       grant_status: ${{ steps.delegar.outputs.grant_status }}
@@ -282,6 +285,7 @@ jobs:
     if: ${{ needs.crear_app.outputs.app_type == 'cc' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       secret_status: ${{ steps.crear_secret.outputs.secret_status }}
@@ -342,6 +346,7 @@ jobs:
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     outputs:
       audit_status: ${{ steps.persist.outputs.audit_status }}
