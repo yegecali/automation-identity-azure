@@ -9,9 +9,9 @@ import jobs.update.update_configure_redirect_uri_job as redirect_job
 
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path, app_type="ac"):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-1")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-1")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-1")
         monkeypatch.setenv("B2CC_INPUT_OPERATION", "update")
         monkeypatch.setenv("B2CC_INPUT_ENV", "dev")
         monkeypatch.setenv("B2CC_INPUT_TENNANT", "persona")

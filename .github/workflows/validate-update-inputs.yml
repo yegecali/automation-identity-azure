@@ -45,7 +45,6 @@ jobs:
       app_found: ${{ steps.validar.outputs.app_found }}
       scopes_added: ${{ steps.validar.outputs.scopes_added }}
       scopes_missing: ${{ steps.validar.outputs.scopes_missing }}
-    environment: ${{ inputs.env }}-${{ inputs.tennant }}
     env:
       B2CC_INPUT_OPERATION: update
       B2CC_INPUT_ENV: ${{ inputs.env }}
@@ -54,9 +53,24 @@ jobs:
       B2CC_INPUT_NAME: ${{ inputs.name }}
       B2CC_INPUT_APPLICATION_NAME: ${{ inputs.application_name }}
       B2CC_INPUT_SCOPES: ${{ inputs.scopes }}
-      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
-      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

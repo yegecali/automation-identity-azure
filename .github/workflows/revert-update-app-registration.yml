@@ -87,7 +87,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-    environment: ${{ needs.buscar_snapshot.outputs.env }}-${{ needs.buscar_snapshot.outputs.tennant }}
     outputs:
       revert_status: ${{ steps.revertir.outputs.revert_status }}
       app_id: ${{ steps.revertir.outputs.app_id }}
@@ -96,9 +95,24 @@ jobs:
       env: ${{ steps.revertir.outputs.env }}
       tennant: ${{ steps.revertir.outputs.tennant }}
     env:
-      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
-      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
       AZURE_TABLE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_TABLE_STORAGE_CONNECTION_STRING }}
       AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME: ${{ vars.AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME }}
     steps:

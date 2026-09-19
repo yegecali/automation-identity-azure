@@ -21,28 +21,19 @@ def _safe_value(value: str | None) -> str:
     return str(value or "").strip()
 
 
-TENANT_ID_VAR = "B2CC_TENANT_ID"
-CLIENT_ID_VAR = "B2CC_CLIENT_ID"
-CLIENT_SECRET_VAR = "B2CC_CLIENT_SECRET"
-
-
 def get_env_credentials(env: str, tennant: str = "persona") -> CredentialsDTO:
-    """Obtiene credenciales desde el GitHub Environment activo (env+tennant).
-
-    El job de GitHub Actions que invoca este script ya selecciono el
-    GitHub Environment correspondiente (`environment: <env>-<tennant>`, ej.
-    'dev-persona' o 'cer-pyme'), asi que las tres variables ya apuntan a las
-    credenciales correctas sin necesidad de armar un nombre distinto por cada
-    combinacion de ambiente/tennant.
+    """Obtiene credenciales por ambiente desde variables de entorno.
 
     Efecto en tenant:
     - Ninguno. Solo resuelve credenciales para autenticacion posterior.
 
     Pasos funcionales:
-    1. Valida que env/tennant sean valores permitidos (evita autenticar con el
-       Environment equivocado por un typo silencioso).
-    2. Lee B2CC_TENANT_ID / B2CC_CLIENT_ID / B2CC_CLIENT_SECRET.
-    3. Verifica que no falte ninguna.
+    1. Valida ambiente permitido.
+    2. Valida tennant permitido.
+    3. Resuelve aliases por `tennant`:
+       - persona: `B2CC_<ENV>_*`
+       - pyme: `B2CC_<ENV>_PYME_*`
+    4. Verifica que no falte ninguna variable.
     """
     safe_env = _safe_value(env).lower()
     if safe_env not in VALID_ENVS:
@@ -52,22 +43,28 @@ def get_env_credentials(env: str, tennant: str = "persona") -> CredentialsDTO:
     if safe_tennant not in VALID_TENNANTS:
         raise RuntimeError("El campo tennant debe ser 'persona' o 'pyme'.")
 
-    tenant_id = _safe_value(os.getenv(TENANT_ID_VAR))
-    client_id = _safe_value(os.getenv(CLIENT_ID_VAR))
-    client_secret = _safe_value(os.getenv(CLIENT_SECRET_VAR))
+    env_alias = safe_env.upper()
+    suffix = "" if safe_tennant == "persona" else "_PYME"
+    tenant_var = f"B2CC_{env_alias}{suffix}_TENANT_ID"
+    client_var = f"B2CC_{env_alias}{suffix}_CLIENT_ID"
+    secret_var = f"B2CC_{env_alias}{suffix}_CLIENT_SECRET"
+
+    tenant_id = _safe_value(os.getenv(tenant_var))
+    client_id = _safe_value(os.getenv(client_var))
+    client_secret = _safe_value(os.getenv(secret_var))
 
     missing = []
     if not tenant_id:
-        missing.append(TENANT_ID_VAR)
+        missing.append(tenant_var)
     if not client_id:
-        missing.append(CLIENT_ID_VAR)
+        missing.append(client_var)
     if not client_secret:
-        missing.append(CLIENT_SECRET_VAR)
+        missing.append(secret_var)
 
     if missing:
         raise RuntimeError(
-            f"Faltan variables de entorno para el GitHub Environment '{safe_env}-{safe_tennant}': "
-            + ", ".join(missing)
+            "Faltan variables de entorno para el ambiente "
+            f"'{safe_env}': {', '.join(missing)}"
         )
 
     return CredentialsDTO(

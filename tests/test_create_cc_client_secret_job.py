@@ -49,9 +49,9 @@ class TestResolveAppContext:
 
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-1")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-1")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-1")
         output_file = tmp_path / "github_output.txt"
         monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
         return output_file

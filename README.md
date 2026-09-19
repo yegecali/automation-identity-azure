@@ -203,42 +203,42 @@ Excepción deliberada: el comentario markdown que generan los workflows de valid
 (`validate_*_comment.md`) sigue viajando por archivo — es texto multilínea con backticks, y ahí sí
 un archivo es más robusto que variables de entorno.
 
-## Credenciales por ambiente (GitHub Environments)
+## Credenciales por ambiente (secrets de repositorio)
 
-Las credenciales de Azure AD ya no se seleccionan por nombre de variable (`B2CC_DEV_PYME_*`,
-etc.) — eso significaba exponer los 18 secrets en el `env:` de cada job aunque solo se usaran 3.
-Ahora cada job que necesita autenticarse declara `environment: ${{ inputs.env }}-${{ inputs.tennant }}`
-(ej. `dev-persona`, `cer-pyme`, `pro-persona`) y lee solo 3 nombres fijos:
+Las credenciales de Azure AD se seleccionan por nombre de variable, resuelto en
+`get_env_credentials(env, tennant)` (`src/utils/runtime_config.py`) a partir de `env`/`tennant`:
 
 ```
-B2CC_TENANT_ID / B2CC_CLIENT_ID / B2CC_CLIENT_SECRET
+persona: B2CC_<ENV>_TENANT_ID / B2CC_<ENV>_CLIENT_ID / B2CC_<ENV>_CLIENT_SECRET
+pyme:    B2CC_<ENV>_PYME_TENANT_ID / B2CC_<ENV>_PYME_CLIENT_ID / B2CC_<ENV>_PYME_CLIENT_SECRET
 ```
 
-**Requiere crear 6 GitHub Environments** en el repo (Settings → Environments), cada uno con esos
-3 secrets apuntando a las credenciales de esa combinación:
+Son 6 combinaciones (18 secrets) definidos como **Repository secrets** (Settings → Secrets and
+variables → Actions), sin depender de GitHub Environments:
 
-| GitHub Environment | Reemplaza a (secrets viejos) |
+| Combinación | Secrets |
 |---|---|
-| `dev-persona` | `B2CC_DEV_TENANT_ID` / `B2CC_DEV_CLIENT_ID` / `B2CC_DEV_CLIENT_SECRET` |
-| `dev-pyme` | `B2CC_DEV_PYME_TENANT_ID` / `B2CC_DEV_PYME_CLIENT_ID` / `B2CC_DEV_PYME_CLIENT_SECRET` |
-| `cer-persona` | `B2CC_CER_TENANT_ID` / `B2CC_CER_CLIENT_ID` / `B2CC_CER_CLIENT_SECRET` |
-| `cer-pyme` | `B2CC_CER_PYME_TENANT_ID` / `B2CC_CER_PYME_CLIENT_ID` / `B2CC_CER_PYME_CLIENT_SECRET` |
-| `pro-persona` | `B2CC_PRO_TENANT_ID` / `B2CC_PRO_CLIENT_ID` / `B2CC_PRO_CLIENT_SECRET` |
-| `pro-pyme` | `B2CC_PRO_PYME_TENANT_ID` / `B2CC_PRO_PYME_CLIENT_ID` / `B2CC_PRO_PYME_CLIENT_SECRET` |
+| `dev` + persona | `B2CC_DEV_TENANT_ID` / `B2CC_DEV_CLIENT_ID` / `B2CC_DEV_CLIENT_SECRET` |
+| `dev` + pyme | `B2CC_DEV_PYME_TENANT_ID` / `B2CC_DEV_PYME_CLIENT_ID` / `B2CC_DEV_PYME_CLIENT_SECRET` |
+| `cer` + persona | `B2CC_CER_TENANT_ID` / `B2CC_CER_CLIENT_ID` / `B2CC_CER_CLIENT_SECRET` |
+| `cer` + pyme | `B2CC_CER_PYME_TENANT_ID` / `B2CC_CER_PYME_CLIENT_ID` / `B2CC_CER_PYME_CLIENT_SECRET` |
+| `pro` + persona | `B2CC_PRO_TENANT_ID` / `B2CC_PRO_CLIENT_ID` / `B2CC_PRO_CLIENT_SECRET` |
+| `pro` + pyme | `B2CC_PRO_PYME_TENANT_ID` / `B2CC_PRO_PYME_CLIENT_ID` / `B2CC_PRO_PYME_CLIENT_SECRET` |
 
-En cada Environment, los 3 secrets se llaman **igual** (`TENANT_ID`, `CLIENT_ID`, `CLIENT_SECRET`)
-— es el Environment el que los distingue, no el nombre. Aplica a los 6 workflows que autentican
-contra Azure AD: `create-app-registration.yml`, `update-app-registration.yml`,
-`validate-create-inputs.yml`, `validate-update-inputs.yml`,
-`revert-create-app-registration.yml` y `revert-update-app-registration.yml`.
+Cada job que necesita autenticarse contra Azure AD expone los 18 secrets en su `env:` (aunque
+solo use 3 en cada corrida) para que el script Python resuelva dinámicamente cuáles le tocan según
+`env`/`tennant`. Aplica a los 6 workflows que autentican contra Azure AD:
+`create-app-registration.yml`, `update-app-registration.yml`, `validate-create-inputs.yml`,
+`validate-update-inputs.yml`, `revert-create-app-registration.yml` y
+`revert-update-app-registration.yml`.
 
 **Caso especial — los 2 workflows de revert:** solo reciben `ticket_number` como input; `env`/
 `tennant` no se conocen hasta leer el snapshot guardado en Table Storage. Por eso cada uno tiene
 un job previo, `buscar_snapshot`, que solo necesita `AZURE_TABLE_STORAGE_*` (sin credenciales de
 Azure AD) para resolver `env`/`tennant` desde el snapshot y exponerlos como output; el job
-`revertir_*` los usa recién ahí para fijar `environment: ${{ needs.buscar_snapshot.outputs.env }}-${{ needs.buscar_snapshot.outputs.tennant }}`
-y autenticarse. El snapshot se consulta dos veces (liviano en `buscar_snapshot`, completo en
-`revertir_*`) — es una lectura barata, no un problema real.
+`revertir_*` usa esos outputs para llamar a `get_env_credentials(env, tennant)` y autenticarse.
+El snapshot se consulta dos veces (liviano en `buscar_snapshot`, completo en `revertir_*`) — es
+una lectura barata, no un problema real.
 
 Además, para la auditoría: `AZURE_TABLE_STORAGE_CONNECTION_STRING` (SAS) y
 `AZURE_TABLE_STORAGE_TABLE_NAME`. Para el rollback: la misma

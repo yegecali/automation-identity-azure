@@ -77,7 +77,6 @@ jobs:
       app_type: ${{ steps.run_create_flow.outputs.app_type }}
       sp_id: ${{ steps.validar_sp.outputs.sp_id }}
       sp_status: ${{ steps.validar_sp.outputs.sp_status }}
-    environment: ${{ inputs.env }}-${{ inputs.tennant }}
     env:
       B2CC_INPUT_OPERATION: create
       B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
@@ -85,9 +84,24 @@ jobs:
       B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
       B2CC_INPUT_TYPE: ${{ inputs.type }}
       B2CC_INPUT_NAME: ${{ inputs.name }}
-      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
-      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -231,7 +245,6 @@ jobs:
     outputs:
       grant_status: ${{ steps.delegar.outputs.grant_status }}
       granted_scopes: ${{ steps.delegar.outputs.granted_scopes }}
-    environment: ${{ inputs.env }}-${{ inputs.tennant }}
     env:
       B2CC_INPUT_OPERATION: create
       B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
@@ -239,9 +252,24 @@ jobs:
       B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
       B2CC_INPUT_TYPE: ${{ inputs.type }}
       B2CC_INPUT_NAME: ${{ inputs.name }}
-      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
-      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -292,7 +320,6 @@ jobs:
       client_secret_obfuscated: ${{ steps.crear_secret.outputs.client_secret_obfuscated }}
       client_secret_alias: ${{ steps.crear_secret.outputs.client_secret_alias }}
       client_secret_expires_at: ${{ steps.crear_secret.outputs.client_secret_expires_at }}
-    environment: ${{ inputs.env }}-${{ inputs.tennant }}
     env:
       B2CC_INPUT_OPERATION: create
       B2CC_INPUT_CHANNEL: ${{ inputs.channel }}
@@ -300,9 +327,24 @@ jobs:
       B2CC_INPUT_TENNANT: ${{ inputs.tennant }}
       B2CC_INPUT_TYPE: ${{ inputs.type }}
       B2CC_INPUT_NAME: ${{ inputs.name }}
-      B2CC_TENANT_ID: ${{ secrets.TENANT_ID }}
-      B2CC_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      B2CC_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      B2CC_DEV_TENANT_ID: ${{ secrets.B2CC_DEV_TENANT_ID }}
+      B2CC_DEV_CLIENT_ID: ${{ secrets.B2CC_DEV_CLIENT_ID }}
+      B2CC_DEV_CLIENT_SECRET: ${{ secrets.B2CC_DEV_CLIENT_SECRET }}
+      B2CC_DEV_PYME_TENANT_ID: ${{ secrets.B2CC_DEV_PYME_TENANT_ID }}
+      B2CC_DEV_PYME_CLIENT_ID: ${{ secrets.B2CC_DEV_PYME_CLIENT_ID }}
+      B2CC_DEV_PYME_CLIENT_SECRET: ${{ secrets.B2CC_DEV_PYME_CLIENT_SECRET }}
+      B2CC_CER_TENANT_ID: ${{ secrets.B2CC_CER_TENANT_ID }}
+      B2CC_CER_CLIENT_ID: ${{ secrets.B2CC_CER_CLIENT_ID }}
+      B2CC_CER_CLIENT_SECRET: ${{ secrets.B2CC_CER_CLIENT_SECRET }}
+      B2CC_CER_PYME_TENANT_ID: ${{ secrets.B2CC_CER_PYME_TENANT_ID }}
+      B2CC_CER_PYME_CLIENT_ID: ${{ secrets.B2CC_CER_PYME_CLIENT_ID }}
+      B2CC_CER_PYME_CLIENT_SECRET: ${{ secrets.B2CC_CER_PYME_CLIENT_SECRET }}
+      B2CC_PRO_TENANT_ID: ${{ secrets.B2CC_PRO_TENANT_ID }}
+      B2CC_PRO_CLIENT_ID: ${{ secrets.B2CC_PRO_CLIENT_ID }}
+      B2CC_PRO_CLIENT_SECRET: ${{ secrets.B2CC_PRO_CLIENT_SECRET }}
+      B2CC_PRO_PYME_TENANT_ID: ${{ secrets.B2CC_PRO_PYME_TENANT_ID }}
+      B2CC_PRO_PYME_CLIENT_ID: ${{ secrets.B2CC_PRO_PYME_CLIENT_ID }}
+      B2CC_PRO_PYME_CLIENT_SECRET: ${{ secrets.B2CC_PRO_PYME_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

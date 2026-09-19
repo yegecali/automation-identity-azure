@@ -9,9 +9,9 @@ import jobs.update.save_pre_update_snapshot_job as snapshot_job
 
 class TestMain:
     def _set_common_env(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("B2CC_TENANT_ID", "tenant-1")
-        monkeypatch.setenv("B2CC_CLIENT_ID", "client-1")
-        monkeypatch.setenv("B2CC_CLIENT_SECRET", "secret-1")
+        monkeypatch.setenv("B2CC_DEV_TENANT_ID", "tenant-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_ID", "client-1")
+        monkeypatch.setenv("B2CC_DEV_CLIENT_SECRET", "secret-1")
         monkeypatch.setenv("AZURE_TABLE_STORAGE_CONNECTION_STRING", "conn-string")
         monkeypatch.setenv("AZURE_TABLE_STORAGE_HISTORY_TABLE_NAME", "history")
         monkeypatch.setenv("B2CC_INPUT_OPERATION", "update")
