@@ -20,12 +20,18 @@ while not os.path.isdir(os.path.join(SRC_DIR, "models")):
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from constants import AC_GRAPH_DELEGATED_PERMISSIONS, CC_GRAPH_DELEGATED_PERMISSIONS, MICROSOFT_GRAPH_APP_ID
+from constants import (
+    AC_GRAPH_DELEGATED_PERMISSIONS,
+    CC_GRAPH_DELEGATED_PERMISSIONS,
+    GRAPH_APPLICATION_PERMISSIONS,
+    MICROSOFT_GRAPH_APP_ID,
+)
 from services.graph_service import (
     get_application_by_app_id,
     get_service_principal_by_app_id,
     patch_application,
     run_az,
+    upsert_app_role_assignments_with_retry,
     upsert_oauth2_permission_grant_with_retry,
 )
 from utils.common import dedupe_resource_access, get_obfuscated_secret, load_dispatch_input_from_env
@@ -49,17 +55,22 @@ def resolve_permissions(app_type: str) -> list[str]:
     raise RuntimeError("type debe ser 'cc' o 'ac' para delegar permisos de Graph.")
 
 
-def ensure_graph_required_resource_access(app_id: str, graph_app_id: str, permissions: list[str]) -> int:
-    """Declara delegated permissions de Graph en requiredResourceAccess.
+def ensure_graph_required_resource_access(
+    app_id: str, graph_app_id: str, permissions: list[str]
+) -> tuple[int, list[str], list[str]]:
+    """Declara permisos de Graph en requiredResourceAccess (Delegated + Application).
 
     Efecto en tenant:
     - Actualiza `requiredResourceAccess` en la App Registration cliente.
 
     Pasos funcionales:
     1. Resuelve app por appId y service principal de Graph.
-    2. Mapea valores de scope (openid/offline_access/User.Read.All) a IDs de Graph.
-    3. Hace merge en entry de Graph (`resourceAppId` de Microsoft Graph).
-    4. Ejecuta PATCH solo con permisos deduplicados.
+    2. Separa `permissions` en delegados (Scope) y de aplicacion (Role) segun
+       `GRAPH_APPLICATION_PERMISSIONS` (ej. User.Read.All va como Role).
+    3. Mapea cada grupo a sus IDs: `oauth2PermissionScopes` para Scope,
+       `appRoles` para Role.
+    4. Hace merge en entry de Graph (`resourceAppId` de Microsoft Graph).
+    5. Ejecuta PATCH solo con permisos deduplicados.
     """
     app = get_application_by_app_id(app_id)
     if not app:
@@ -73,6 +84,9 @@ def ensure_graph_required_resource_access(app_id: str, graph_app_id: str, permis
     if not graph_sp:
         raise RuntimeError("No se encontro service principal de Microsoft Graph para resolver IDs de scopes.")
 
+    delegated_permissions = [p for p in permissions if p not in GRAPH_APPLICATION_PERMISSIONS]
+    application_permissions = [p for p in permissions if p in GRAPH_APPLICATION_PERMISSIONS]
+
     graph_scope_id_by_value: dict[str, str] = {}
     for scope in graph_sp.get("oauth2PermissionScopes") or []:
         value = str(scope.get("value") or "").strip()
@@ -80,17 +94,32 @@ def ensure_graph_required_resource_access(app_id: str, graph_app_id: str, permis
         if value and scope_id:
             graph_scope_id_by_value[value] = scope_id
 
-    missing = [scope for scope in permissions if scope not in graph_scope_id_by_value]
-    if missing:
+    graph_role_id_by_value: dict[str, str] = {}
+    for role in graph_sp.get("appRoles") or []:
+        value = str(role.get("value") or "").strip()
+        role_id = str(role.get("id") or "").strip()
+        if value and role_id:
+            graph_role_id_by_value[value] = role_id
+
+    missing_scopes = [scope for scope in delegated_permissions if scope not in graph_scope_id_by_value]
+    if missing_scopes:
         raise RuntimeError(
             "No se pudieron resolver IDs de permisos delegados de Graph para: "
-            + ", ".join(missing)
+            + ", ".join(missing_scopes)
         )
 
+    missing_roles = [role for role in application_permissions if role not in graph_role_id_by_value]
+    if missing_roles:
+        raise RuntimeError(
+            "No se pudieron resolver IDs de permisos de aplicacion de Graph para: "
+            + ", ".join(missing_roles)
+        )
+
+    application_role_ids = [graph_role_id_by_value[role] for role in application_permissions]
+
     graph_resource_access = [
-        {"id": graph_scope_id_by_value[scope], "type": "Scope"}
-        for scope in permissions
-    ]
+        {"id": graph_scope_id_by_value[scope], "type": "Scope"} for scope in delegated_permissions
+    ] + [{"id": role_id, "type": "Role"} for role_id in application_role_ids]
 
     existing_rra = app.get("requiredResourceAccess") or []
     same_graph_entry = next((entry for entry in existing_rra if entry.get("resourceAppId") == graph_app_id), None)
@@ -118,7 +147,7 @@ def ensure_graph_required_resource_access(app_id: str, graph_app_id: str, permis
     )
 
     patch_application(app_object_id, {"requiredResourceAccess": new_required_resource_access})
-    return len(merged_resource_access)
+    return len(merged_resource_access), delegated_permissions, application_role_ids
 
 
 def main() -> int:
@@ -170,18 +199,28 @@ def main() -> int:
     if not graph_sp_id:
         raise RuntimeError("Service principal de Graph no tiene id.")
 
-    configured_count = ensure_graph_required_resource_access(
+    configured_count, delegated_permissions, application_role_ids = ensure_graph_required_resource_access(
         app_id=args.app_id,
         graph_app_id=MICROSOFT_GRAPH_APP_ID,
         permissions=permissions,
     )
-    logging.info("[PERM] requiredResourceAccess (Graph) actualizado con %s scope(s).", configured_count)
+    logging.info("[PERM] requiredResourceAccess (Graph) actualizado con %s permiso(s).", configured_count)
 
-    grant_status = upsert_oauth2_permission_grant_with_retry(
-        client_id=app_sp_id,
-        resource_id=graph_sp_id,
-        scopes=permissions,
-    )
+    grant_status = "skipped"
+    if delegated_permissions:
+        grant_status = upsert_oauth2_permission_grant_with_retry(
+            client_id=app_sp_id,
+            resource_id=graph_sp_id,
+            scopes=delegated_permissions,
+        )
+
+    if application_role_ids:
+        created_assignments = upsert_app_role_assignments_with_retry(
+            client_sp_id=app_sp_id,
+            resource_sp_id=graph_sp_id,
+            app_role_ids=application_role_ids,
+        )
+        logging.info("[PERM] appRoleAssignments (Application) creados: %s", created_assignments)
 
     scope_string = " ".join(sorted(set(permissions)))
     logging.info("[PERM] grant_status=%s scopes=%s", grant_status, scope_string)
