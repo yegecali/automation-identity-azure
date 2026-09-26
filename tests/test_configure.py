@@ -465,8 +465,9 @@ class TestConfigureCcAppRoles:
             or 1,
         )
 
-        configure.configure_cc_app_roles("obj-1", "api-app-id", ["payments.write"], "sp-1")
+        target_roles = configure.configure_cc_app_roles("obj-1", "api-app-id", ["payments.write"], "sp-1")
 
+        assert target_roles == [{"id": "role-1", "value": "payments.write"}]
         assert patch_calls[0]["requiredResourceAccess"] == [
             {"resourceAppId": "api-app-id", "resourceAccess": [{"id": "role-1", "type": "Role"}]}
         ]

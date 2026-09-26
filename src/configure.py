@@ -426,7 +426,7 @@ def configure_cc_app_roles(
     app_id: str,
     clean_scopes: list[str],
     sp_id: str,
-) -> None:
+) -> list[dict[str, Any]]:
     """Configura app roles y asignaciones para flujo client credentials.
 
     Efecto en tenant:
@@ -437,6 +437,7 @@ def configure_cc_app_roles(
     2. Construye `requiredResourceAccess` con tipo Role.
     3. Aplica PATCH de permisos.
     4. Crea app role assignments faltantes.
+    5. Devuelve los roles objetivo procesados.
     """
     logging.info("[4/8] Agregando app roles (client credentials) en Manifest...")
     target_roles = upsert_app_roles_for_cc(app_object_id, clean_scopes)
@@ -481,6 +482,7 @@ def configure_cc_app_roles(
         app_role_ids=role_ids,
     )
     logging.info("      App role assignments creados: %s", created_count)
+    return target_roles
 
 
 def resolve_runtime_values(input_dto: UpdateInputDTO) -> UpdateRuntimeDTO:

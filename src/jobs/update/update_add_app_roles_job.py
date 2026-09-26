@@ -20,9 +20,9 @@ while not os.path.isdir(os.path.join(SRC_DIR, "models")):
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from configure import configure_ac_scopes, resolve_runtime_values, upsert_app_roles_for_cc
+from configure import configure_cc_app_roles, resolve_runtime_values
 from models.dto import UpdateInputDTO
-from services.graph_service import run_az
+from services.graph_service import create_service_principal, get_service_principal_by_app_id, run_az
 from utils.common import load_dispatch_input_from_env, unique_scopes
 
 
@@ -69,21 +69,22 @@ def main() -> int:
         ]
     )
 
-    target_roles = upsert_app_roles_for_cc(
-        app_object_id=args.app_object_id,
-        clean_scopes=scopes,
-    )
+    app_sp = get_service_principal_by_app_id(args.app_id)
+    if not app_sp:
+        app_sp = create_service_principal(args.app_id)
+    app_sp_id = str(app_sp.get("id") or "").strip()
+    if not app_sp_id:
+        raise RuntimeError("No se pudo resolver service principal id para aplicar app roles CC.")
 
-    configure_ac_scopes(
+    target_roles = configure_cc_app_roles(
         app_object_id=args.app_object_id,
         app_id=args.app_id,
         clean_scopes=scopes,
-        apply_admin_consent=False,
+        sp_id=app_sp_id,
     )
 
     role_values = [str(item.get("value")) for item in target_roles if item.get("value")]
-    logging.info("[SCOPES] Scopes tambien aplicados para CC: %s", ", ".join(scopes))
-    logging.info("[APP-ROLES] App roles CC aplicados: %s", ", ".join(role_values))
+    logging.info("[APP-ROLES] App roles CC aplicados (Application, con consent): %s", ", ".join(role_values))
     set_output("app_roles_status", "updated")
     set_output("app_roles_applied", ",".join(role_values))
     set_output("scopes_status", "updated")

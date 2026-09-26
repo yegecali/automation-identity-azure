@@ -122,19 +122,19 @@ class UpdateInputDTO:
         if isinstance(raw_scopes, list):
             normalized_scopes = []
             for item in raw_scopes:
-                # Support values separated by comma/newline inside each list item.
+                # Support values separated by comma/espacios/saltos de linea dentro de cada item.
                 raw_item = str(item).replace("\\n", "\n")
                 normalized_scopes.extend(
-                    [token.strip() for token in re.split(r"[\n\r,]+", raw_item) if token.strip()]
+                    [token.strip() for token in re.split(r"[\s,]+", raw_item) if token.strip()]
                 )
         elif isinstance(raw_scopes, str):
             normalized_scopes = [
                 token.strip()
-                for token in re.split(r"[\n\r,]+", raw_scopes.replace("\\n", "\n"))
+                for token in re.split(r"[\s,]+", raw_scopes.replace("\\n", "\n"))
                 if token.strip()
             ]
         else:
-            raise RuntimeError("El campo scopes en input.json debe ser una lista o string separado por comas o saltos de linea.")
+            raise RuntimeError("El campo scopes en input.json debe ser una lista o string separado por comas, espacios o saltos de linea.")
 
         scopes = sorted(set(normalized_scopes))
         if not scopes:

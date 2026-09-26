@@ -22,19 +22,24 @@ class TestMain:
         monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
         return output_file
 
-    def test_applies_roles_and_scopes_for_cc_flow(self, monkeypatch, tmp_path):
-        output_file = self._set_common_env(monkeypatch, tmp_path)
+    def _mock_sp_resolution(self, monkeypatch, sp_id="app-sp-1"):
+        monkeypatch.setattr(roles_job, "get_service_principal_by_app_id", lambda app_id: {"id": sp_id})
         monkeypatch.setattr(
             roles_job,
-            "upsert_app_roles_for_cc",
-            lambda app_object_id, clean_scopes: [{"value": "payments.write", "id": "role-1"}],
+            "create_service_principal",
+            lambda app_id: pytest.fail("create_service_principal no deberia llamarse si el SP ya existe"),
         )
-        ac_scope_calls = []
+
+    def test_applies_roles_for_cc_flow_with_consent(self, monkeypatch, tmp_path):
+        output_file = self._set_common_env(monkeypatch, tmp_path)
+        self._mock_sp_resolution(monkeypatch)
+        configure_calls = []
         monkeypatch.setattr(
             roles_job,
-            "configure_ac_scopes",
-            lambda app_object_id, app_id, clean_scopes, apply_admin_consent: ac_scope_calls.append(
-                apply_admin_consent
+            "configure_cc_app_roles",
+            lambda app_object_id, app_id, clean_scopes, sp_id: (
+                configure_calls.append((app_object_id, app_id, clean_scopes, sp_id))
+                or [{"value": "payments.write", "id": "role-1"}]
             ),
         )
         monkeypatch.setattr(sys, "argv", ["prog", "--app-object-id", "obj-1", "--app-id", "app-1"])
@@ -44,19 +49,34 @@ class TestMain:
         assert "app_roles_status=updated" in content
         assert "app_roles_applied=payments.write" in content
         assert "scopes_applied=payments.write" in content
-        assert ac_scope_calls == [False]
+        assert configure_calls == [("obj-1", "app-1", ["payments.write"], "app-sp-1")]
+
+    def test_creates_service_principal_when_missing(self, monkeypatch, tmp_path):
+        self._set_common_env(monkeypatch, tmp_path)
+        monkeypatch.setattr(roles_job, "get_service_principal_by_app_id", lambda app_id: None)
+        monkeypatch.setattr(roles_job, "create_service_principal", lambda app_id: {"id": "created-sp"})
+        configure_calls = []
+        monkeypatch.setattr(
+            roles_job,
+            "configure_cc_app_roles",
+            lambda app_object_id, app_id, clean_scopes, sp_id: (
+                configure_calls.append(sp_id) or [{"value": "payments.write", "id": "role-1"}]
+            ),
+        )
+        monkeypatch.setattr(sys, "argv", ["prog", "--app-object-id", "obj-1", "--app-id", "app-1"])
+
+        assert roles_job.main() == 0
+        assert configure_calls == ["created-sp"]
 
     def test_scopes_csv_overrides_dispatch_scopes(self, monkeypatch, tmp_path):
         output_file = self._set_common_env(monkeypatch, tmp_path)
+        self._mock_sp_resolution(monkeypatch)
         monkeypatch.setattr(
             roles_job,
-            "upsert_app_roles_for_cc",
-            lambda app_object_id, clean_scopes: [{"value": v, "id": f"role-{v}"} for v in clean_scopes],
-        )
-        monkeypatch.setattr(
-            roles_job,
-            "configure_ac_scopes",
-            lambda app_object_id, app_id, clean_scopes, apply_admin_consent: None,
+            "configure_cc_app_roles",
+            lambda app_object_id, app_id, clean_scopes, sp_id: [
+                {"value": v, "id": f"role-{v}"} for v in clean_scopes
+            ],
         )
         monkeypatch.setattr(
             sys,
