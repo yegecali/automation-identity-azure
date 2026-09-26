@@ -96,6 +96,58 @@ class TestMain:
         with pytest.raises(RuntimeError, match="No se pudo confirmar"):
             redirect_job.main()
 
+    def test_reports_configured_when_no_previous_redirect_uri(self, monkeypatch, tmp_path):
+        output_file = self._set_common_env(monkeypatch, tmp_path, app_type="ac")
+        monkeypatch.setattr(redirect_job, "patch_application", lambda object_id, body: None)
+        monkeypatch.setattr(
+            redirect_job,
+            "get_application_by_id_with_retry",
+            lambda object_id: {"web": {"redirectUris": ["https://example.com/callback"]}},
+        )
+        calls = {"n": 0}
+        real_get = redirect_job.get_application_by_id_with_retry
+
+        def sequenced_get(object_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"web": {"redirectUris": []}}
+            return real_get(object_id)
+
+        monkeypatch.setattr(redirect_job, "get_application_by_id_with_retry", sequenced_get)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["prog", "--app-object-id", "obj-1", "--redirect-uri", "https://example.com/callback"],
+        )
+
+        assert redirect_job.main() == 0
+        content = output_file.read_text(encoding="utf-8")
+        assert "redirect_previous_uri=" in content
+        assert "redirect_change_status=configured" in content
+
+    def test_reports_changed_when_previous_redirect_uri_differs(self, monkeypatch, tmp_path):
+        output_file = self._set_common_env(monkeypatch, tmp_path, app_type="ac")
+        monkeypatch.setattr(redirect_job, "patch_application", lambda object_id, body: None)
+        calls = {"n": 0}
+
+        def sequenced_get(object_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"web": {"redirectUris": ["https://old.example.com/callback"]}}
+            return {"web": {"redirectUris": ["https://example.com/callback"]}}
+
+        monkeypatch.setattr(redirect_job, "get_application_by_id_with_retry", sequenced_get)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["prog", "--app-object-id", "obj-1", "--redirect-uri", "https://example.com/callback"],
+        )
+
+        assert redirect_job.main() == 0
+        content = output_file.read_text(encoding="utf-8")
+        assert "redirect_previous_uri=https://old.example.com/callback" in content
+        assert "redirect_change_status=changed" in content
+
     def test_raises_on_invalid_redirect_uri(self, monkeypatch, tmp_path):
         self._set_common_env(monkeypatch, tmp_path, app_type="ac")
         monkeypatch.setattr(sys, "argv", ["prog", "--app-object-id", "obj-1", "--redirect-uri", "not-a-url"])

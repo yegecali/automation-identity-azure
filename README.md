@@ -186,6 +186,32 @@ directorios hasta encontrar el paquete `models/` para ubicar la raíz de `src/` 
 un job nuevo no hace falta tocar ese bloque. `configure.py`, `constants.py` y los paquetes
 `models/`, `services/`, `utils/` viven siempre directo bajo `src/`.
 
+### Scopes/App Roles en el flujo update: modo "replace", no aditivo
+
+`update_add_scopes_job.py` (AC) y `update_add_app_roles_job.py` (CC) tratan el `scopes` que llega
+en el `workflow_dispatch` como el **estado definitivo**, no como una lista a la que solo se agrega.
+En cada corrida, `configure.configure_ac_scopes()` / `configure.configure_cc_app_roles()`:
+
+1. Calculan un diff de 3 vías contra lo ya configurado en Azure AD: `added` (nuevo), `kept` (ya
+   estaba y sigue viniendo) y `removed` (ya estaba pero ya no vino en este `scopes`).
+2. Los `removed` se retiran de verdad — no es solo un aviso. Graph exige deshabilitar
+   (`isEnabled: false`) un `oauth2PermissionScope`/`appRole` antes de poder eliminarlo del
+   manifest, así que cada retiro son 2 PATCH: uno que deshabilita, otro que ya no lo incluye.
+   También se revoca el consent (`oauth2PermissionGrant` para AC, `appRoleAssignment` para CC) de
+   lo retirado.
+3. El job expone `scopes_added` / `scopes_kept` / `scopes_removed` como outputs (CSV), que
+   `notificar_issue` en `automation.yml` usa para armar el resumen del comentario final: lista con
+   ✅ cuando todo coincide, o separado en agregados/mantenidos/eliminados cuando hay un retiro.
+
+**Implicación operativa:** si a un ticket de actualización solo le pones 2 scopes pero la app ya
+tenía 5 configurados, los otros 3 se eliminan de Azure AD en esa misma corrida. El input del
+dispatch es la fuente de verdad completa, no un delta a sumar.
+
+`update_configure_redirect_uri_job.py` sigue el mismo espíritu para el Redirect URI: lee el valor
+previo antes del PATCH y expone `redirect_previous_uri`/`redirect_change_status`
+(`configured`/`changed`/`unchanged`) para que el comentario final diga explícitamente si se
+configuró por primera vez, cambió de un valor a otro, o quedó igual.
+
 ### Cómo llegan los inputs del dispatch a cada job
 
 Los jobs que necesitan el payload del `workflow_dispatch` (operation/channel/env/tennant/type/

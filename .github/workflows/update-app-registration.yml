@@ -56,12 +56,22 @@ on:
         value: ${{ jobs.update_busqueda_app.outputs.app_type }}
       redirect_uri:
         value: ${{ jobs.update_configurar_redirect_uri.outputs.redirect_uri }}
+      redirect_previous_uri:
+        value: ${{ jobs.update_configurar_redirect_uri.outputs.redirect_previous_uri }}
+      redirect_change_status:
+        value: ${{ jobs.update_configurar_redirect_uri.outputs.redirect_change_status }}
       application_id_uri:
         value: ${{ jobs.update_agregar_application_id_uri_ac.outputs.application_id_uri || jobs.update_agregar_application_id_uri_cc.outputs.application_id_uri }}
       scopes_applied:
         value: ${{ jobs.update_agregar_scopes_ac.outputs.scopes_applied }}
       app_roles_applied:
         value: ${{ jobs.update_agregar_app_roles_cc.outputs.app_roles_applied }}
+      scopes_added:
+        value: ${{ jobs.update_agregar_scopes_ac.outputs.scopes_added || jobs.update_agregar_app_roles_cc.outputs.scopes_added }}
+      scopes_kept:
+        value: ${{ jobs.update_agregar_scopes_ac.outputs.scopes_kept || jobs.update_agregar_app_roles_cc.outputs.scopes_kept }}
+      scopes_removed:
+        value: ${{ jobs.update_agregar_scopes_ac.outputs.scopes_removed || jobs.update_agregar_app_roles_cc.outputs.scopes_removed }}
       grant_status:
         value: ${{ jobs.update_delegar_permisos_graph.outputs.grant_status }}
       granted_scopes:
@@ -230,6 +240,8 @@ jobs:
       issues: write
     outputs:
       redirect_uri: ${{ steps.redirect.outputs.redirect_uri }}
+      redirect_previous_uri: ${{ steps.redirect.outputs.redirect_previous_uri }}
+      redirect_change_status: ${{ steps.redirect.outputs.redirect_change_status }}
     env:
       B2CC_INPUT_OPERATION: update
       B2CC_INPUT_ENV: ${{ inputs.env }}
@@ -378,6 +390,9 @@ jobs:
       issues: write
     outputs:
       scopes_applied: ${{ steps.scopes.outputs.scopes_applied }}
+      scopes_added: ${{ steps.scopes.outputs.scopes_added }}
+      scopes_kept: ${{ steps.scopes.outputs.scopes_kept }}
+      scopes_removed: ${{ steps.scopes.outputs.scopes_removed }}
     env:
       B2CC_INPUT_OPERATION: update
       B2CC_INPUT_ENV: ${{ inputs.env }}
@@ -526,6 +541,9 @@ jobs:
       issues: write
     outputs:
       app_roles_applied: ${{ steps.roles.outputs.app_roles_applied }}
+      scopes_added: ${{ steps.roles.outputs.scopes_added }}
+      scopes_kept: ${{ steps.roles.outputs.scopes_kept }}
+      scopes_removed: ${{ steps.roles.outputs.scopes_removed }}
     env:
       B2CC_INPUT_OPERATION: update
       B2CC_INPUT_ENV: ${{ inputs.env }}

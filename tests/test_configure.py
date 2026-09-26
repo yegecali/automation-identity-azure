@@ -11,7 +11,7 @@ from configure import (
     validate_app_client_id,
     validate_redirect_uri,
 )
-from models.dto import UpdateInputDTO
+from models.dto import ScopeChangeSummary, UpdateInputDTO
 
 GUID = "12345678-1234-4234-8234-123456789012"
 
@@ -322,6 +322,30 @@ class TestUpsertAppRolesForCc:
         _, body = patch_calls[0]
         assert body["appRoles"] == [existing_role]
 
+    def test_disables_then_removes_roles_no_longer_desired(self, monkeypatch):
+        keep_role = {"id": "role-keep", "value": "payments.write", "isEnabled": True}
+        drop_role = {"id": "role-drop", "value": "payments.legacy", "isEnabled": True}
+        monkeypatch.setattr(
+            configure, "get_application_by_id_with_retry", lambda object_id: {"appRoles": [keep_role, drop_role]}
+        )
+        patch_calls = []
+        monkeypatch.setattr(
+            configure, "patch_application", lambda object_id, body: patch_calls.append((object_id, body))
+        )
+
+        target_roles = configure.upsert_app_roles_for_cc("obj-1", ["payments.write"])
+
+        assert target_roles == [keep_role]
+        # 2 PATCHes: primero deshabilita el role a retirar, luego lo quita del todo.
+        assert len(patch_calls) == 2
+        _, disable_body = patch_calls[0]
+        disabled = next(r for r in disable_body["appRoles"] if r["value"] == "payments.legacy")
+        assert disabled["isEnabled"] is False
+        still_enabled = next(r for r in disable_body["appRoles"] if r["value"] == "payments.write")
+        assert still_enabled["isEnabled"] is True
+        _, final_body = patch_calls[1]
+        assert final_body["appRoles"] == [keep_role]
+
 
 class TestConfigureAcScopes:
     def _base_app(self):
@@ -442,6 +466,63 @@ class TestConfigureAcScopes:
         with pytest.raises(RuntimeError, match="No se pudo resolver service principal id"):
             configure.configure_ac_scopes("obj-1", "api-app-id", ["orders.read"])
 
+    def test_replaces_scopes_disabling_then_removing_and_returns_diff(self, monkeypatch):
+        keep_scope = {"id": "scope-keep", "value": "orders.read", "isEnabled": True}
+        drop_scope = {"id": "scope-drop", "value": "orders.legacy", "isEnabled": True}
+        app_state = {
+            "api": {"oauth2PermissionScopes": [keep_scope, drop_scope]},
+            "requiredResourceAccess": [
+                {
+                    "resourceAppId": "api-app-id",
+                    "resourceAccess": [
+                        {"id": "scope-keep", "type": "Scope"},
+                        {"id": "scope-drop", "type": "Scope"},
+                    ],
+                }
+            ],
+        }
+        monkeypatch.setattr(configure, "get_application_by_id_with_retry", lambda object_id: app_state)
+        patch_calls = []
+        monkeypatch.setattr(configure, "patch_application", lambda object_id, body: patch_calls.append(body))
+        monkeypatch.setattr(
+            configure,
+            "wait_for_configured_permissions",
+            lambda app_object_id, app_id, expected_scope_ids: (expected_scope_ids, []),
+        )
+        monkeypatch.setattr(configure, "get_service_principal_by_app_id", lambda app_id: {"id": "sp-1"})
+        grant_calls = []
+        monkeypatch.setattr(
+            configure,
+            "upsert_oauth2_permission_grant_with_retry",
+            lambda client_id, resource_id, scopes: grant_calls.append(scopes) or "updated",
+        )
+
+        summary = configure.configure_ac_scopes("obj-1", "api-app-id", ["orders.read", "orders.new"])
+
+        assert summary.added == ["orders.new"]
+        assert summary.kept == ["orders.read"]
+        assert summary.removed == ["orders.legacy"]
+
+        api_patch_bodies = [body["api"] for body in patch_calls if "api" in body]
+        assert len(api_patch_bodies) == 2
+        disabled_scope = next(
+            s for s in api_patch_bodies[0]["oauth2PermissionScopes"] if s["value"] == "orders.legacy"
+        )
+        assert disabled_scope["isEnabled"] is False
+        final_scope_values = {s["value"] for s in api_patch_bodies[1]["oauth2PermissionScopes"]}
+        assert final_scope_values == {"orders.read", "orders.new"}
+
+        rra_patch = next(body for body in patch_calls if "requiredResourceAccess" in body)
+        target_entry = next(
+            e for e in rra_patch["requiredResourceAccess"] if e["resourceAppId"] == "api-app-id"
+        )
+        target_ids = {item["id"] for item in target_entry["resourceAccess"]}
+        assert "scope-keep" in target_ids
+        assert "scope-drop" not in target_ids
+        assert len(target_ids) == 2  # scope-keep (reused) + el nuevo scope de orders.new
+
+        assert grant_calls == [["orders.read", "orders.new"]]
+
 
 class TestConfigureCcAppRoles:
     def test_creates_roles_and_assignments(self, monkeypatch):
@@ -464,10 +545,16 @@ class TestConfigureCcAppRoles:
             )
             or 1,
         )
+        monkeypatch.setattr(
+            configure,
+            "remove_app_role_assignments",
+            lambda **kwargs: pytest.fail("no deberia intentar remover nada, no hay roles a retirar"),
+        )
 
-        target_roles = configure.configure_cc_app_roles("obj-1", "api-app-id", ["payments.write"], "sp-1")
+        target_roles, summary = configure.configure_cc_app_roles("obj-1", "api-app-id", ["payments.write"], "sp-1")
 
         assert target_roles == [{"id": "role-1", "value": "payments.write"}]
+        assert summary == ScopeChangeSummary(added=["payments.write"], kept=[], removed=[])
         assert patch_calls[0]["requiredResourceAccess"] == [
             {"resourceAppId": "api-app-id", "resourceAccess": [{"id": "role-1", "type": "Role"}]}
         ]
@@ -499,6 +586,42 @@ class TestConfigureCcAppRoles:
 
         resource_app_ids = {entry["resourceAppId"] for entry in patch_calls[0]["requiredResourceAccess"]}
         assert resource_app_ids == {"00000003-0000-0000-c000-000000000000", "api-app-id"}
+
+    def test_removes_assignments_for_roles_no_longer_desired(self, monkeypatch):
+        monkeypatch.setattr(
+            configure,
+            "get_application_by_id_with_retry",
+            lambda object_id: {
+                "appRoles": [
+                    {"id": "role-keep", "value": "payments.write"},
+                    {"id": "role-drop", "value": "payments.legacy"},
+                ],
+                "requiredResourceAccess": [],
+            },
+        )
+        monkeypatch.setattr(
+            configure,
+            "upsert_app_roles_for_cc",
+            lambda app_object_id, clean_scopes: [{"id": "role-keep", "value": "payments.write"}],
+        )
+        monkeypatch.setattr(configure, "patch_application", lambda object_id, body: None)
+        monkeypatch.setattr(configure, "upsert_app_role_assignments_with_retry", lambda **kwargs: 0)
+        removal_calls = []
+        monkeypatch.setattr(
+            configure,
+            "remove_app_role_assignments",
+            lambda client_sp_id, resource_sp_id, app_role_ids: removal_calls.append(
+                (client_sp_id, resource_sp_id, app_role_ids)
+            )
+            or 1,
+        )
+
+        target_roles, summary = configure.configure_cc_app_roles(
+            "obj-1", "api-app-id", ["payments.write"], "sp-1"
+        )
+
+        assert summary == ScopeChangeSummary(added=[], kept=["payments.write"], removed=["payments.legacy"])
+        assert removal_calls == [("sp-1", "sp-1", ["role-drop"])]
 
 
 class TestWaitForConfiguredPermissions:

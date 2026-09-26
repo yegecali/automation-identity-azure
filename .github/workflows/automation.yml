@@ -291,9 +291,13 @@ jobs:
               const clientId = outputs.app_id || 'N/A';
               const appType = outputs.app_type || 'N/A';
               const redirectUri = outputs.redirect_uri || '';
-              const scopesOrRoles = appType === 'cc'
-                ? (outputs.app_roles_applied || 'N/A')
-                : (outputs.scopes_applied || 'N/A');
+              const redirectPreviousUri = outputs.redirect_previous_uri || '';
+              const redirectChangeStatus = outputs.redirect_change_status || '';
+              const label = appType === 'cc' ? 'App Roles' : 'Scopes';
+              const splitCsv = (value) => String(value || '').split(',').map((v) => v.trim()).filter(Boolean);
+              const added = splitCsv(outputs.scopes_added);
+              const kept = splitCsv(outputs.scopes_kept);
+              const removed = splitCsv(outputs.scopes_removed);
               const savedInTableStorage = outputs.audit_status === 'persisted' ? '✅ Sí' : '❌ No';
 
               const lines = [
@@ -313,9 +317,35 @@ jobs:
                 lines.push('🔒 **Client Secret:** No aplica (flujo AC no usa client secret)');
               }
 
-              lines.push(`🎯 **Scopes/App Roles configurados:** \`${scopesOrRoles}\``);
+              if (!removed.length) {
+                const configured = [...added, ...kept];
+                lines.push(`🎯 **${label} configurados:**`);
+                if (configured.length) {
+                  configured.forEach((scope) => lines.push(`   ✅ \`${scope}\``));
+                } else {
+                  lines.push('   _(ninguno)_');
+                }
+              } else {
+                if (added.length) {
+                  lines.push(`🎯 **${label} agregados:**`);
+                  added.forEach((scope) => lines.push(`   ✅ \`${scope}\``));
+                }
+                if (kept.length) {
+                  lines.push(`➡️ **${label} que se mantienen:**`);
+                  kept.forEach((scope) => lines.push(`   ✅ \`${scope}\``));
+                }
+                lines.push(`🗑️ **${label} eliminados (ya no vinieron en esta solicitud):**`);
+                removed.forEach((scope) => lines.push(`   ❌ \`${scope}\``));
+              }
+
               if (redirectUri) {
-                lines.push(`🔗 **Redirect URI:** \`${redirectUri}\``);
+                if (redirectChangeStatus === 'changed') {
+                  lines.push(`🔗 **Redirect URI:** cambió de \`${redirectPreviousUri}\` a \`${redirectUri}\``);
+                } else if (redirectChangeStatus === 'configured') {
+                  lines.push(`🔗 **Redirect URI:** se configuró con \`${redirectUri}\``);
+                } else {
+                  lines.push(`🔗 **Redirect URI:** sin cambios, se mantiene \`${redirectUri}\``);
+                }
               }
               lines.push(`💾 **Guardado en Table Storage:** ${savedInTableStorage}`);
 

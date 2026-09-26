@@ -251,6 +251,18 @@ def graph_patch(url: str, body: dict[str, Any]) -> None:
     GRAPH_CLIENT.request("PATCH", url, body)
 
 
+def graph_delete(url: str) -> None:
+    """Wrapper DELETE para Microsoft Graph.
+
+    Efecto en tenant:
+    - Elimina el recurso apuntado por `url`.
+
+    Pasos funcionales:
+    1. Delega en `GraphHttpClient.request` con metodo DELETE.
+    """
+    GRAPH_CLIENT.request("DELETE", url)
+
+
 def get_first_value(response: dict[str, Any]) -> dict[str, Any] | None:
     """Extrae el primer elemento de una respuesta Graph basada en `value`.
 
@@ -506,14 +518,15 @@ def upsert_oauth2_permission_grant_with_retry(
     max_attempts: int = 8,
     delay_seconds: int = 3,
 ) -> str:
-    """Crea o actualiza OAuth2PermissionGrant para scopes delegados.
+    """Crea o reemplaza OAuth2PermissionGrant para scopes delegados.
 
     Efecto en tenant:
-    - Crea/actualiza consent de tipo delegado (`oauth2PermissionGrants`).
+    - Crea/reemplaza consent de tipo delegado (`oauth2PermissionGrants`).
 
     Pasos funcionales:
     1. Busca grant existente para client/resource (`AllPrincipals`).
-    2. Si existe, fusiona scopes y actualiza.
+    2. Si existe, reemplaza su `scope` por exactamente `scopes` (el caller ya
+       resolvio la lista definitiva; no se conserva lo que ya no venga).
     3. Si no existe, crea grant nuevo con los scopes esperados.
     4. Reintenta ante errores de propagacion de directorio.
     """
@@ -530,11 +543,9 @@ def upsert_oauth2_permission_grant_with_retry(
             )
 
             if existing_grant:
-                existing_scopes = str(existing_grant.get("scope", "")).split()
-                merged_scopes = " ".join(sorted(set([item for item in existing_scopes + scopes if item.strip()])))
                 graph_patch(
                     f"https://graph.microsoft.com/v1.0/oauth2PermissionGrants/{existing_grant.get('id')}",
-                    {"scope": merged_scopes},
+                    {"scope": target_scope_string},
                 )
                 return "updated"
 
@@ -662,3 +673,43 @@ def upsert_app_role_assignments_with_retry(
             raise
 
     raise RuntimeError(f"No se pudo crear appRoleAssignments tras reintentos. Error: {last_error}")
+
+
+def delete_app_role_assignment(client_sp_id: str, assignment_id: str) -> None:
+    """Elimina una asignacion puntual de app role.
+
+    Efecto en tenant:
+    - Revoca una `appRoleAssignment` (equivalente a retirar el consent de un
+      permiso de aplicacion).
+
+    Pasos funcionales:
+    1. Ejecuta DELETE sobre appRoleAssignments/{assignment_id} del SP cliente.
+    """
+    graph_delete(f"https://graph.microsoft.com/v1.0/servicePrincipals/{client_sp_id}/appRoleAssignments/{assignment_id}")
+
+
+def remove_app_role_assignments(client_sp_id: str, resource_sp_id: str, app_role_ids: list[str]) -> int:
+    """Elimina las appRoleAssignments de los roles indicados si existen.
+
+    Efecto en tenant:
+    - Revoca asignaciones de roles de aplicacion para el SP cliente.
+
+    Pasos funcionales:
+    1. Lee asignaciones actuales entre client/resource.
+    2. Filtra las que correspondan a `app_role_ids`.
+    3. Elimina cada una encontrada.
+    4. Devuelve cantidad de asignaciones eliminadas.
+    """
+    target_role_ids = set([item for item in app_role_ids if item])
+    if not target_role_ids:
+        return 0
+
+    existing_assignments = list_app_role_assignments(client_sp_id, resource_sp_id)
+    to_delete = [
+        item for item in existing_assignments if str(item.get("appRoleId")) in target_role_ids and item.get("id")
+    ]
+
+    for assignment in to_delete:
+        delete_app_role_assignment(client_sp_id, str(assignment.get("id")))
+
+    return len(to_delete)

@@ -201,7 +201,7 @@ class TestUpsertOauth2PermissionGrantWithRetry:
         assert created["body"]["resourceId"] == "sp-2"
         assert created["body"]["scope"] == "offline_access openid"
 
-    def test_updates_existing_grant_by_merging_scopes(self, monkeypatch):
+    def test_updates_existing_grant_by_replacing_scopes(self, monkeypatch):
         monkeypatch.setattr(
             graph_service,
             "graph_get",
@@ -223,7 +223,8 @@ class TestUpsertOauth2PermissionGrantWithRetry:
 
         assert status == "updated"
         assert patched["url"] == "https://graph.microsoft.com/v1.0/oauth2PermissionGrants/grant-1"
-        assert set(patched["body"]["scope"].split()) == {"openid", "offline_access"}
+        # "openid" ya no viene en la lista definitiva -> se reemplaza, no se conserva.
+        assert set(patched["body"]["scope"].split()) == {"offline_access"}
 
 
 class TestUpsertAppRoleAssignmentsWithRetry:
@@ -258,6 +259,82 @@ class TestUpsertAppRoleAssignmentsWithRetry:
             client_sp_id="sp-1", resource_sp_id="sp-2", app_role_ids=[]
         )
         assert created_count == 0
+
+
+class TestGraphDelete:
+    def test_delegates_to_client_request_with_delete_method(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            graph_service.GRAPH_CLIENT,
+            "request",
+            lambda method, url, body=None: calls.append((method, url, body)),
+        )
+
+        graph_service.graph_delete("https://graph.microsoft.com/v1.0/servicePrincipals/sp-1/appRoleAssignments/a-1")
+
+        assert calls == [
+            ("DELETE", "https://graph.microsoft.com/v1.0/servicePrincipals/sp-1/appRoleAssignments/a-1", None)
+        ]
+
+
+class TestDeleteAppRoleAssignment:
+    def test_deletes_the_expected_url(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(graph_service, "graph_delete", lambda url: calls.append(url))
+
+        graph_service.delete_app_role_assignment("sp-1", "assignment-1")
+
+        assert calls == ["https://graph.microsoft.com/v1.0/servicePrincipals/sp-1/appRoleAssignments/assignment-1"]
+
+
+class TestRemoveAppRoleAssignments:
+    def test_removes_only_matching_assignments(self, monkeypatch):
+        monkeypatch.setattr(
+            graph_service,
+            "list_app_role_assignments",
+            lambda client_sp_id, resource_sp_id: [
+                {"id": "a-1", "appRoleId": "role-1"},
+                {"id": "a-2", "appRoleId": "role-2"},
+                {"id": "a-3", "appRoleId": "role-3"},
+            ],
+        )
+        deleted = []
+        monkeypatch.setattr(
+            graph_service,
+            "delete_app_role_assignment",
+            lambda client_sp_id, assignment_id: deleted.append((client_sp_id, assignment_id)),
+        )
+
+        removed_count = graph_service.remove_app_role_assignments(
+            client_sp_id="sp-1", resource_sp_id="sp-2", app_role_ids=["role-2"]
+        )
+
+        assert removed_count == 1
+        assert deleted == [("sp-1", "a-2")]
+
+    def test_returns_zero_when_no_role_ids_given(self, monkeypatch):
+        monkeypatch.setattr(
+            graph_service, "list_app_role_assignments", lambda client_sp_id, resource_sp_id: pytest.fail("no debe llamarse")
+        )
+        removed_count = graph_service.remove_app_role_assignments(
+            client_sp_id="sp-1", resource_sp_id="sp-2", app_role_ids=[]
+        )
+        assert removed_count == 0
+
+    def test_returns_zero_when_nothing_matches(self, monkeypatch):
+        monkeypatch.setattr(
+            graph_service,
+            "list_app_role_assignments",
+            lambda client_sp_id, resource_sp_id: [{"id": "a-1", "appRoleId": "role-1"}],
+        )
+        monkeypatch.setattr(
+            graph_service, "delete_app_role_assignment", lambda client_sp_id, assignment_id: pytest.fail("no debe llamarse")
+        )
+
+        removed_count = graph_service.remove_app_role_assignments(
+            client_sp_id="sp-1", resource_sp_id="sp-2", app_role_ids=["role-999"]
+        )
+        assert removed_count == 0
 
 
 class TestPatchServicePrincipal:

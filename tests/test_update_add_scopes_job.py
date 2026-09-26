@@ -5,6 +5,7 @@ import sys
 import pytest
 
 import jobs.update.update_add_scopes_job as scopes_job
+from models.dto import ScopeChangeSummary
 
 
 class TestMain:
@@ -28,7 +29,8 @@ class TestMain:
         monkeypatch.setattr(
             scopes_job,
             "configure_ac_scopes",
-            lambda app_object_id, app_id, clean_scopes: calls.append((app_object_id, app_id, clean_scopes)),
+            lambda app_object_id, app_id, clean_scopes: calls.append((app_object_id, app_id, clean_scopes))
+            or ScopeChangeSummary(added=["orders.write"], kept=["orders.read"], removed=["orders.old"]),
         )
         monkeypatch.setattr(sys, "argv", ["prog", "--app-object-id", "obj-1", "--app-id", "app-1"])
 
@@ -36,6 +38,9 @@ class TestMain:
         content = output_file.read_text(encoding="utf-8")
         assert "scopes_status=updated" in content
         assert "scopes_applied=orders.read,orders.write" in content
+        assert "scopes_added=orders.write" in content
+        assert "scopes_kept=orders.read" in content
+        assert "scopes_removed=orders.old" in content
         assert calls == [("obj-1", "app-1", ["orders.read", "orders.write"])]
 
     def test_scopes_csv_overrides_dispatch_scopes(self, monkeypatch, tmp_path):
@@ -44,7 +49,8 @@ class TestMain:
         monkeypatch.setattr(
             scopes_job,
             "configure_ac_scopes",
-            lambda app_object_id, app_id, clean_scopes: calls.append(clean_scopes),
+            lambda app_object_id, app_id, clean_scopes: calls.append(clean_scopes)
+            or ScopeChangeSummary(added=["custom.scope"], kept=[], removed=[]),
         )
         monkeypatch.setattr(
             sys,

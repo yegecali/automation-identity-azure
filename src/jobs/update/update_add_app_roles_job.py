@@ -76,7 +76,7 @@ def main() -> int:
     if not app_sp_id:
         raise RuntimeError("No se pudo resolver service principal id para aplicar app roles CC.")
 
-    target_roles = configure_cc_app_roles(
+    target_roles, summary = configure_cc_app_roles(
         app_object_id=args.app_object_id,
         app_id=args.app_id,
         clean_scopes=scopes,
@@ -85,10 +85,16 @@ def main() -> int:
 
     role_values = [str(item.get("value")) for item in target_roles if item.get("value")]
     logging.info("[APP-ROLES] App roles CC aplicados (Application, con consent): %s", ", ".join(role_values))
+    logging.info(
+        "[APP-ROLES] added=%s kept=%s removed=%s", summary.added, summary.kept, summary.removed
+    )
     set_output("app_roles_status", "updated")
     set_output("app_roles_applied", ",".join(role_values))
     set_output("scopes_status", "updated")
     set_output("scopes_applied", ",".join(scopes))
+    set_output("scopes_added", ",".join(summary.added))
+    set_output("scopes_kept", ",".join(summary.kept))
+    set_output("scopes_removed", ",".join(summary.removed))
     return 0
 
 

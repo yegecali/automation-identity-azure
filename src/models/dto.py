@@ -258,3 +258,17 @@ class ScopeDTO:
             "userConsentDisplayName": self.user_consent_display_name,
             "userConsentDescription": self.user_consent_description,
         }
+
+
+@dataclass(frozen=True)
+class ScopeChangeSummary:
+    """Resultado del diff de 3 vias entre lo configurado y lo definitivo.
+
+    added: valores nuevos que no estaban configurados.
+    kept: valores que ya estaban y siguen viniendo en el input.
+    removed: valores que ya no vienen en el input y se retiraron de Azure AD.
+    """
+
+    added: list[str]
+    kept: list[str]
+    removed: list[str]

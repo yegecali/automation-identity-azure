@@ -52,6 +52,28 @@ def build_app_display_name(name: str, channel: str, app_type: str) -> str:
     return f"b2c-{safe_channel}-{safe_name}-{safe_type}-client-id"
 
 
+def diff_scopes(existing: list[str], desired: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """Calcula el diff de 3 vias entre lo configurado y lo definitivo (workflow input).
+
+    Efecto en tenant:
+    - Ninguno. Calculo puro sobre listas ya cargadas.
+
+    Pasos funcionales:
+    1. Normaliza ambas listas (values() de unique_scopes).
+    2. added = en desired pero no en existing.
+    3. kept = en ambas.
+    4. removed = en existing pero no en desired (ya no viene en el input, se
+       debe retirar porque el input es la fuente de verdad).
+    """
+    existing_set = set(unique_scopes(existing))
+    desired_set = set(unique_scopes(desired))
+
+    added = sorted(desired_set - existing_set)
+    kept = sorted(desired_set & existing_set)
+    removed = sorted(existing_set - desired_set)
+    return added, kept, removed
+
+
 def unique_scopes(values: list[str]) -> list[str]:
     """Limpia y deduplica lista de scopes.
 

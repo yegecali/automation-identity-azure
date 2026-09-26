@@ -68,6 +68,10 @@ def main() -> int:
     is_cc = runtime.app_type == "cc"
     platform_key = "spa" if is_cc else "web"
 
+    app_before = get_application_by_id_with_retry(args.app_object_id)
+    previous_uris = [str(item) for item in (app_before.get(platform_key) or {}).get("redirectUris", [])]
+    previous_uri = previous_uris[0] if previous_uris else ""
+
     patch_body = {platform_key: {"redirectUris": [redirect_uri]}}
     if is_cc:
         patch_body["web"] = {
@@ -95,9 +99,21 @@ def main() -> int:
 
     if is_cc:
         logging.info("[AUTH] Implicit/hybrid habilitado en CC: access tokens + id tokens")
-    logging.info("[REDIRECT] redirectUri configurado en %s: %s", platform_key, redirect_uri)
+
+    if not previous_uri:
+        change_status = "configured"
+        logging.info("[REDIRECT] No habia redirect URI previo. Se configuro con: %s", redirect_uri)
+    elif previous_uri == redirect_uri:
+        change_status = "unchanged"
+        logging.info("[REDIRECT] redirectUri ya estaba configurado igual: %s", redirect_uri)
+    else:
+        change_status = "changed"
+        logging.info("[REDIRECT] redirectUri cambio de '%s' a '%s'", previous_uri, redirect_uri)
+
     set_output("redirect_uri", redirect_uri)
     set_output("redirect_status", "updated")
+    set_output("redirect_previous_uri", previous_uri)
+    set_output("redirect_change_status", change_status)
     return 0
 
 

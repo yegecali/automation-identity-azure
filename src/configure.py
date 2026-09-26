@@ -23,12 +23,14 @@ from services.graph_service import (
     get_application_by_id_with_retry,
     get_service_principal_by_app_id,
     patch_application,
+    remove_app_role_assignments,
     upsert_app_role_assignments_with_retry,
     upsert_oauth2_permission_grant_with_retry,
 )
-from models.dto import AppRoleDTO, ScopeDTO, UpdateInputDTO, UpdateRuntimeDTO
+from models.dto import AppRoleDTO, ScopeChangeSummary, ScopeDTO, UpdateInputDTO, UpdateRuntimeDTO
 from utils.common import (
     dedupe_resource_access,
+    diff_scopes,
     unique_scopes,
 )
 from utils.runtime_config import get_env_credentials
@@ -254,16 +256,19 @@ def resolve_app_type(input_dto: UpdateInputDTO) -> str:
 
 
 def upsert_app_roles_for_cc(app_object_id: str, clean_scopes: list[str]) -> list[dict[str, Any]]:
-    """Crea o reutiliza appRoles en manifest para flujo client credentials.
+    """Crea, reutiliza y retira appRoles en manifest para flujo client credentials (modo replace).
 
     Efecto en tenant:
     - Actualiza `appRoles` de la App Registration.
+    - Retira (deshabilita y elimina) los app roles que ya no vengan en `clean_scopes`.
 
     Pasos funcionales:
     1. Lee appRoles actuales.
-    2. Reutiliza roles existentes por `value`.
-    3. Crea roles faltantes y aplica PATCH.
-    4. Devuelve roles objetivo procesados.
+    2. Reutiliza roles existentes por `value`; crea los faltantes.
+    3. Si hay roles a retirar, los deshabilita primero (Graph exige
+       isEnabled=false antes de poder eliminar un appRole).
+    4. Aplica PATCH final con el estado definitivo (los retirados quedan fuera).
+    5. Devuelve roles objetivo procesados (kept + added).
     """
     app = get_application_by_id_with_retry(app_object_id)
     existing_app_roles = app.get("appRoles") or []
@@ -274,9 +279,9 @@ def upsert_app_roles_for_cc(app_object_id: str, clean_scopes: list[str]) -> list
         if value:
             app_role_by_value[str(value)] = role
 
-    merged_app_roles = [dict(role) for role in existing_app_roles]
-    target_roles: list[dict[str, Any]] = []
+    _added, _kept, removed = diff_scopes(list(app_role_by_value.keys()), clean_scopes)
 
+    target_roles: list[dict[str, Any]] = []
     for role_value in clean_scopes:
         if role_value in app_role_by_value:
             logging.info("      App role ya existe, se reutiliza: %s", role_value)
@@ -284,12 +289,30 @@ def upsert_app_roles_for_cc(app_object_id: str, clean_scopes: list[str]) -> list
             continue
 
         new_role = AppRoleDTO.from_role_value(role_value).to_graph_dict()
-        merged_app_roles.append(new_role)
         target_roles.append(new_role)
         logging.info("      App role agregado: %s", role_value)
 
-    patch_application(app_object_id, {"appRoles": merged_app_roles})
+    if removed:
+        logging.info("      App roles a retirar (ya no vienen en el input): %s", ", ".join(removed))
+        disable_patch_roles = [
+            {**role, "isEnabled": False} if role.get("value") in removed else role
+            for role in existing_app_roles
+        ]
+        patch_application(app_object_id, {"appRoles": disable_patch_roles})
+
+    patch_application(app_object_id, {"appRoles": target_roles})
     return target_roles
+
+
+def _build_api_body(api_data: dict[str, Any], oauth2_permission_scopes: list[dict[str, Any]]) -> dict[str, Any]:
+    api_body: dict[str, Any] = {"oauth2PermissionScopes": oauth2_permission_scopes}
+    if api_data.get("preAuthorizedApplications") is not None:
+        api_body["preAuthorizedApplications"] = api_data.get("preAuthorizedApplications")
+    if api_data.get("knownClientApplications") is not None:
+        api_body["knownClientApplications"] = api_data.get("knownClientApplications")
+    if api_data.get("requestedAccessTokenVersion") is not None:
+        api_body["requestedAccessTokenVersion"] = api_data.get("requestedAccessTokenVersion")
+    return api_body
 
 
 def configure_ac_scopes(
@@ -297,18 +320,25 @@ def configure_ac_scopes(
     app_id: str,
     clean_scopes: list[str],
     apply_admin_consent: bool = True,
-) -> None:
-    """Configura scopes delegados y consent para flujo authorization code.
+) -> ScopeChangeSummary:
+    """Configura scopes delegados y consent para flujo authorization code (modo replace).
 
     Efecto en tenant:
     - Actualiza `api.oauth2PermissionScopes` y `requiredResourceAccess` tipo Scope.
+    - Retira (deshabilita y elimina) los scopes que ya no vengan en `clean_scopes`.
 
     Pasos funcionales:
-    1. Hace merge de scopes existentes y nuevos.
-    2. Actualiza bloque `api` en la app.
-    3. Actualiza permisos configurados (`requiredResourceAccess`).
-    4. Verifica propagacion de scopes configurados.
-    5. Aplica admin consent (grant) para que no queden en estado `Not granted for tenant`.
+    1. Calcula diff de 3 vias (added/kept/removed) contra `clean_scopes`.
+    2. Si hay scopes a retirar, los deshabilita primero (Graph exige
+       isEnabled=false antes de poder eliminar un oauth2PermissionScope).
+    3. Actualiza bloque `api` con el estado final (kept + added; los
+       eliminados quedan fuera).
+    4. Actualiza `requiredResourceAccess` reemplazando (no fusionando) la
+       entrada de esta misma API por la lista definitiva.
+    5. Verifica propagacion de scopes configurados.
+    6. Aplica admin consent (grant, en modo replace) para que el estado
+       otorgado coincida exactamente con `clean_scopes`.
+    7. Devuelve el diff (added/kept/removed) para reporte.
     """
     logging.info("[4/8] Agregando scopes en Expose an API...")
     app = get_application_by_id_with_retry(app_object_id)
@@ -322,9 +352,9 @@ def configure_ac_scopes(
         if value:
             scope_by_value[str(value)] = scope
 
-    all_scopes_for_api = [dict(scope) for scope in existing_scopes]
-    target_scope_objects: list[dict[str, Any]] = []
+    added, kept, removed = diff_scopes(list(scope_by_value.keys()), clean_scopes)
 
+    target_scope_objects: list[dict[str, Any]] = []
     for scope_name in clean_scopes:
         if scope_name in scope_by_value:
             logging.info("      Scope ya existe, se reutiliza: %s", scope_name)
@@ -332,36 +362,30 @@ def configure_ac_scopes(
             continue
 
         new_scope = ScopeDTO.from_scope_name(scope_name).to_graph_dict()
-        all_scopes_for_api.append(new_scope)
         target_scope_objects.append(new_scope)
         logging.info("      Scope agregado: %s", scope_name)
 
-    api_body: dict[str, Any] = {"oauth2PermissionScopes": all_scopes_for_api}
-    if api_data.get("preAuthorizedApplications") is not None:
-        api_body["preAuthorizedApplications"] = api_data.get("preAuthorizedApplications")
-    if api_data.get("knownClientApplications") is not None:
-        api_body["knownClientApplications"] = api_data.get("knownClientApplications")
-    if api_data.get("requestedAccessTokenVersion") is not None:
-        api_body["requestedAccessTokenVersion"] = api_data.get("requestedAccessTokenVersion")
+    if removed:
+        logging.info("      Scopes a retirar (ya no vienen en el input): %s", ", ".join(removed))
+        disable_patch_scopes = [
+            {**scope, "isEnabled": False} if scope.get("value") in removed else scope
+            for scope in existing_scopes
+        ]
+        patch_application(app_object_id, {"api": _build_api_body(api_data, disable_patch_scopes)})
 
-    patch_application(app_object_id, {"api": api_body})
+    patch_application(app_object_id, {"api": _build_api_body(api_data, target_scope_objects)})
 
     logging.info("[5/8] Configurando API permissions (My organization uses)...")
     app = get_application_by_id_with_retry(app_object_id)
 
-    resource_access_for_target_api = [{"id": item.get("id"), "type": "Scope"} for item in target_scope_objects]
-    existing_rra = app.get("requiredResourceAccess") or []
-    same_api_entry = next((entry for entry in existing_rra if entry.get("resourceAppId") == app_id), None)
+    target_resource_access = dedupe_resource_access(
+        [{"id": item.get("id"), "type": "Scope"} for item in target_scope_objects]
+    )
 
-    merged_resource_access = []
-    if same_api_entry and isinstance(same_api_entry.get("resourceAccess"), list):
-        merged_resource_access.extend(same_api_entry.get("resourceAccess") or [])
-    merged_resource_access.extend(resource_access_for_target_api)
-    merged_resource_access = dedupe_resource_access(merged_resource_access)
-
-    if not merged_resource_access:
+    if not target_resource_access:
         raise RuntimeError("No se pudo construir requiredResourceAccess para la API destino porque resourceAccess quedo vacio.")
 
+    existing_rra = app.get("requiredResourceAccess") or []
     new_required_resource_access = []
     for api_entry in existing_rra:
         resource_app_id = api_entry.get("resourceAppId")
@@ -375,14 +399,14 @@ def configure_ac_scopes(
             )
 
     new_required_resource_access.append(
-        {"resourceAppId": app_id, "resourceAccess": merged_resource_access}
+        {"resourceAppId": app_id, "resourceAccess": target_resource_access}
     )
 
     logging.info("      requiredResourceAccess entries a enviar: %s", len(new_required_resource_access))
     patch_application(app_object_id, {"requiredResourceAccess": new_required_resource_access})
 
     expected_scope_ids = [
-        str(item.get("id")) for item in merged_resource_access if item.get("type") == "Scope" and item.get("id")
+        str(item.get("id")) for item in target_resource_access if item.get("type") == "Scope" and item.get("id")
     ]
     configured_scope_ids, missing_configured_scope_ids = wait_for_configured_permissions(
         app_object_id=app_object_id,
@@ -402,7 +426,7 @@ def configure_ac_scopes(
 
     if not apply_admin_consent:
         logging.info("[6/8] Se omite admin consent de scopes (flujo no AC).")
-        return
+        return ScopeChangeSummary(added=added, kept=kept, removed=removed)
 
     logging.info("[6/8] Aplicando admin consent para scopes AC...")
     app_sp = get_service_principal_by_app_id(app_id)
@@ -418,7 +442,9 @@ def configure_ac_scopes(
         resource_id=app_sp_id,
         scopes=clean_scopes,
     )
-    logging.info("      Grant AC aplicado sobre Configured permissions. Estado: %s", grant_status)
+    logging.info("      Grant AC aplicado sobre Configured permissions (replace). Estado: %s", grant_status)
+
+    return ScopeChangeSummary(added=added, kept=kept, removed=removed)
 
 
 def configure_cc_app_roles(
@@ -426,19 +452,35 @@ def configure_cc_app_roles(
     app_id: str,
     clean_scopes: list[str],
     sp_id: str,
-) -> list[dict[str, Any]]:
-    """Configura app roles y asignaciones para flujo client credentials.
+) -> tuple[list[dict[str, Any]], ScopeChangeSummary]:
+    """Configura app roles y asignaciones para flujo client credentials (modo replace).
 
     Efecto en tenant:
     - Actualiza `appRoles`, `requiredResourceAccess` tipo Role y `appRoleAssignments`.
+    - Retira asignaciones y permisos de los roles que ya no vengan en `clean_scopes`.
 
     Pasos funcionales:
-    1. Crea/reutiliza appRoles de la API.
-    2. Construye `requiredResourceAccess` con tipo Role.
-    3. Aplica PATCH de permisos.
-    4. Crea app role assignments faltantes.
-    5. Devuelve los roles objetivo procesados.
+    1. Calcula diff de 3 vias (added/kept/removed) contra el estado actual.
+    2. Crea/reutiliza/retira appRoles de la API (delegado en `upsert_app_roles_for_cc`).
+    3. Construye `requiredResourceAccess` con tipo Role, reemplazando (no
+       fusionando) la entrada de esta misma API.
+    4. Aplica PATCH de permisos.
+    5. Crea app role assignments faltantes y elimina las de roles retirados.
+    6. Devuelve los roles objetivo procesados junto con el diff.
     """
+    app_before = get_application_by_id_with_retry(app_object_id)
+    existing_role_by_value: dict[str, dict[str, Any]] = {}
+    for role in app_before.get("appRoles") or []:
+        value = role.get("value")
+        if value:
+            existing_role_by_value[str(value)] = role
+    added, kept, removed = diff_scopes(list(existing_role_by_value.keys()), clean_scopes)
+    removed_role_ids = [
+        str(existing_role_by_value[value].get("id"))
+        for value in removed
+        if existing_role_by_value[value].get("id")
+    ]
+
     logging.info("[4/8] Agregando app roles (client credentials) en Manifest...")
     target_roles = upsert_app_roles_for_cc(app_object_id, clean_scopes)
 
@@ -448,13 +490,8 @@ def configure_cc_app_roles(
 
     app = get_application_by_id_with_retry(app_object_id)
     existing_rra = app.get("requiredResourceAccess") or []
-    same_api_entry = next((entry for entry in existing_rra if entry.get("resourceAppId") == app_id), None)
 
-    merged_resource_access = []
-    if same_api_entry and isinstance(same_api_entry.get("resourceAccess"), list):
-        merged_resource_access.extend(same_api_entry.get("resourceAccess") or [])
-    merged_resource_access.extend(role_resource_access)
-    merged_resource_access = dedupe_resource_access(merged_resource_access)
+    target_resource_access = dedupe_resource_access(role_resource_access)
 
     new_required_resource_access = []
     for api_entry in existing_rra:
@@ -469,7 +506,7 @@ def configure_cc_app_roles(
             )
 
     new_required_resource_access.append(
-        {"resourceAppId": app_id, "resourceAccess": merged_resource_access}
+        {"resourceAppId": app_id, "resourceAccess": target_resource_access}
     )
 
     logging.info("[5/8] Configurando API permissions tipo Role (CC)...")
@@ -482,7 +519,16 @@ def configure_cc_app_roles(
         app_role_ids=role_ids,
     )
     logging.info("      App role assignments creados: %s", created_count)
-    return target_roles
+
+    if removed_role_ids:
+        removed_count = remove_app_role_assignments(
+            client_sp_id=sp_id,
+            resource_sp_id=sp_id,
+            app_role_ids=removed_role_ids,
+        )
+        logging.info("      App role assignments retirados: %s", removed_count)
+
+    return target_roles, ScopeChangeSummary(added=added, kept=kept, removed=removed)
 
 
 def resolve_runtime_values(input_dto: UpdateInputDTO) -> UpdateRuntimeDTO:

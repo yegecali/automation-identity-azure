@@ -69,15 +69,21 @@ def main() -> int:
         ]
     )
 
-    configure_ac_scopes(
+    summary = configure_ac_scopes(
         app_object_id=args.app_object_id,
         app_id=args.app_id,
         clean_scopes=scopes,
     )
 
     logging.info("[SCOPES] Scopes AC aplicados: %s", ", ".join(scopes))
+    logging.info(
+        "[SCOPES] added=%s kept=%s removed=%s", summary.added, summary.kept, summary.removed
+    )
     set_output("scopes_status", "updated")
     set_output("scopes_applied", ",".join(scopes))
+    set_output("scopes_added", ",".join(summary.added))
+    set_output("scopes_kept", ",".join(summary.kept))
+    set_output("scopes_removed", ",".join(summary.removed))
     return 0
 
 
