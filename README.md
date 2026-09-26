@@ -13,9 +13,12 @@ y audita cada corrida en Azure Table Storage.
                                    los inputs del dropdown UNA sola vez y llama al reusable
                                    workflow correspondiente según `operation`.
   create-app-registration.yml     Reusable workflow (workflow_call) con todo el flujo de
-                                   creación: crear_app → delegar_permisos_graph →
-                                   crear_client_secret_cc (solo CC) → persistir_auditoria_create,
-                                   cada uno con su comentario de avance en el issue.
+                                   creación: crear_app → guardar_snapshot_create (rollback,
+                                   sí corre en create) → delegar_permisos_graph →
+                                   crear_client_secret_cc (solo CC), cada uno con su
+                                   comentario de avance en el issue. La auditoría
+                                   (persistir_auditoria_*) NO corre en creación, solo en
+                                   actualización — ver sección "Scopes/App Roles..." más abajo.
   update-app-registration.yml     Reusable workflow (workflow_call) con todo el flujo de
                                    actualización: update_busqueda_app → snapshot_estado_previo
                                    → configurar_redirect_uri → (rama AC: application_id_uri +
@@ -66,17 +69,21 @@ flowchart TD
     A["workflow_dispatch\noperation = 01 - Creación"] --> B["abrir_issue\ncrea issue (SCRIPT-USER)"]
     B --> C["normalizar_inputs\nenv/tennant/type → formato corto"]
     C --> D["crear_app\nvalida/crea App Registration + Service Principal"]
-    D -->|comenta avance| E["guardar_snapshot_create\nsnapshot para rollback"]
+    D -->|comenta avance| E["guardar_snapshot_create\nsnapshot para rollback (sí corre en create)"]
     D -->|comenta avance| F["delegar_permisos_graph\nrequiredResourceAccess + grants"]
     F -->|comenta avance| G{"type?"}
     G -->|CC| H["crear_client_secret_cc\ngenera client secret"]
     G -->|AC| I["AC no usa client secret"]
-    E --> J["persistir_auditoria_create\nguarda evento en Table Storage"]
-    H -->|comenta avance| J
-    I --> J
-    J -->|comenta avance| K["notificar_issue\ncierra el issue"]
+    E --> K["notificar_issue\ncierra el issue"]
+    H -->|comenta avance| K
+    I --> K
     K --> L["✅ SCRIPT-SUCCESSFULL\nalias Client ID · alias + vigencia Client Secret (CC) · scopes otorgados"]
 ```
+
+**Nota:** `persistir_auditoria_*` (log de eventos en `AZURE_TABLE_STORAGE_TABLE_NAME`) solo corre
+en el flujo de **actualización**, no en creación — deliberado, ver siguiente sección. El snapshot
+de rollback (`guardar_snapshot_create` / `AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT`) sí corre en
+ambos flujos, porque una creación también debe poder revertirse.
 
 ### Diagrama de flujo — Actualización (AC vs CC)
 
@@ -272,7 +279,7 @@ repo/environment variable:
 
 | Uso | Variable | Jobs | Schema mínimo de la entidad |
 |---|---|---|---|
-| Auditoría (log de eventos) | `AZURE_TABLE_STORAGE_TABLE_NAME` | `persistir_auditoria_create`, `persistir_auditoria_update`, `persistir_auditoria_revert` | `PartitionKey`, `RowKey`, `operation`, `type`, `ClientCode`, `appCode`, `clientId`, `scope`, `userApp`, `createdAt` |
+| Auditoría (log de eventos) | `AZURE_TABLE_STORAGE_TABLE_NAME` | `persistir_auditoria_update`, `persistir_auditoria_revert` — **NO** corre en creación, a propósito | `PartitionKey`, `RowKey`, `operation`, `type`, `ClientCode`, `appCode`, `clientId`, `scope`, `userApp`, `createdAt` |
 | Rollback (snapshot de estado previo) | `AZURE_TABLE_STORAGE_TABLE_NAME_AUDIT` | `guardar_snapshot_create`, `snapshot_estado_previo`, `buscar_snapshot`, `revertir_creacion`, `revertir_actualizacion` | `PartitionKey` (=ticket_number), `RowKey` (=`createdAt_runId`), `operation`, `env`, `tennant`, `applicationName`, `appId`, `appObjectId`, `spId`, `runId`, `runUrl`, `createdAt`, `reverted`, `revertedAt`, `revertedRunId`, `beforeManifestJson`*, `afterSummaryJson`* (*solo en snapshots de update) |
 
 `build_entity()` en `persist_table_storage.py` también escribe alias legacy en minúsculas

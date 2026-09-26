@@ -257,7 +257,7 @@ jobs:
               const clientId = outputs.app_id || 'N/A';
               const appType = outputs.app_type || 'N/A';
               const grants = outputs.granted_scopes || 'N/A';
-              const savedInTableStorage = outputs.audit_status === 'persisted' ? '✅ Sí' : '❌ No';
+              const rollbackSnapshotSaved = outputs.rollback_snapshot_status === 'saved' ? '✅ Sí' : '❌ No';
 
               const lines = [
                 'SCRIPT-SUCCESSFULL',
@@ -279,7 +279,7 @@ jobs:
               }
 
               lines.push(`🎯 **Scopes/Permisos otorgados:** \`${grants}\``);
-              lines.push(`💾 **Guardado en Table Storage:** ${savedInTableStorage}`);
+              lines.push(`🕹️ **Snapshot de rollback guardado:** ${rollbackSnapshotSaved}`);
 
               await closeIssue(lines.join('\n'));
               return;
